@@ -31,24 +31,85 @@ pacman::p_load(
 
 fyc <- readRDS(here::here("data_processed/fyc.RDS"))
 
+fyc <- fyc |> 
+  select(-c(
+    starts_with("INSCOP"), 
+    MARRY31X, MARRY42X, MARRY53X,
+    FAMSZE31, FAMSZE42, FAMSZE53)) |> 
+  relocate(fct_POVCATYY, .after = POVCATYY)
+
 # --------------------------------
 # 1. Design Grid
 # --------------------------------
 sample_sizes <- c(1000, 2000, 10000)
-proportions <- c(0.01, 0.05, 0.10)
-magnitudes <- c(1, 2, 3)  # 1 = ×10, 2 = ×25, 3 = ×50
-treatments <- c("none", "top99", "top99_mean", "top99_median")
+extreme_props <- c(0.01, 0.05, 0.10)
+magnitudes <- c(1, 2, 3)  # 1 = up to $1M, 2 = $2M, 3 = $3M
 
 design_grid <- expand.grid(
   sample_size = sample_sizes,
-  prop = proportions,
-  magnitude = magnitudes,
-  treat = treatments
+  extreme_prop = extreme_props,
+  magnitude = magnitudes
 )
 
-# Mapping for factorial code parts
+# Define upper bounds for magnitudes
+magnitude_bounds <- list(
+  "1" = 1e6,
+  "2" = 2e6,
+  "3" = 3e6
+)
+
+# # Mapping for factorial code parts
 sample_size_codes <- c("1000" = "1", "2000" = "2", "10000" = "3")
 treatment_codes <- c("none" = "1", "top99" = "2", "top99_mean" = "3", "top99_median" = "4")
+
+# Design grid with treatment values: 
+design_grid_w_txs <- expand.grid(
+  sample_size = sample_sizes,
+  extreme_prop = extreme_props,
+  magnitude = magnitudes,
+  treatment = treatment_codes
+  ) |> 
+  arrange(treatment_codes, sample_size, extreme_prop, magnitude)
+  
+
+# --------------------------------
+# 2. Simulate Datasets
+# --------------------------------
+sim_results <- list()
+
+for (i in 1:nrow(design_grid)) {
+  row <- design_grid[i, ]
+  n <- row$sample_size
+  p <- row$extreme_prop
+  m <- row$magnitude
+  upper_bound <- magnitude_bounds[[as.character(m)]]
+
+  # Non-extreme pool: TOTEXPYY < 50,000
+  base_pool <- fyc %>% filter(TOTEXPYY < 50000)
+ 
+  # Generate extreme values
+  num_extreme <- ceiling(n * p)
+  num_normal <- n - num_extreme
+  extreme_vals <- runif(num_extreme, min = 50000, max = upper_bound)
+
+  sim_df <- base_pool %>%
+    sample_n(num_normal, replace = TRUE) %>%
+    mutate(TOTEXPYY = TOTEXPYY) %>%
+    bind_rows(
+      data.frame(base_pool[1:num_extreme, ], TOTEXPYY = extreme_vals)
+    ) %>%
+    mutate(
+      Sample_Size = n,
+      Proportion = paste0(p * 100, "%"),
+      Magnitude = m,
+      condition = paste0("S", n, "_M", m, "_P", p * 100)
+    )
+
+  sim_results[[i]] <- sim_df
+}
+
+sim_data_all <- bind_rows(sim_results)
+
 
 # --------------------------------
 # 2. Apply DV Treatment Function
