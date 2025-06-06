@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data_processed/*
+data_raw/*
+research_lab/*
+background/*
+research_design*
