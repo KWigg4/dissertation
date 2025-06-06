@@ -60,6 +60,7 @@ magnitude_bounds <- list(
 
 # # Mapping for factorial code parts
 sample_size_codes <- c("1000" = "1", "2000" = "2", "10000" = "3")
+treatments <- c("none", "top99", "top99_mean", "top99_median")
 treatment_codes <- c("none" = "1", "top99" = "2", "top99_mean" = "3", "top99_median" = "4")
 
 # Design grid with treatment values: 
@@ -67,11 +68,10 @@ design_grid_w_txs <- expand.grid(
   sample_size = sample_sizes,
   extreme_prop = extreme_props,
   magnitude = magnitudes,
-  treatment = treatment_codes
+  treat = treatments
   ) |> 
-  arrange(treatment_codes, sample_size, extreme_prop, magnitude)
+  arrange(treat, sample_size, extreme_prop, magnitude)
   
-
 # --------------------------------
 # 2. Simulate Datasets
 # --------------------------------
@@ -110,11 +110,14 @@ for (i in 1:nrow(design_grid)) {
 
 sim_data_all <- bind_rows(sim_results)
 
+# At this point, should have a list of 27 (3x3x3) because we haven't applied the treatment yet. 
+# After applying treatments, should have n=108 datasets (3x3x3x4)
 
 # --------------------------------
-# 2. Apply DV Treatment Function
+# 3. Apply DV Treatment Function
 # --------------------------------
-apply_treatment <- function(var, treatment) {
+apply_treatment <- function(df, treatment) {
+  var <- df$TOTEXPYY
   topcut <- quantile(var, 0.99, na.rm = TRUE)
   if (treatment == "none") return(var)
   if (treatment == "top99") return(pmin(var, topcut))
@@ -129,6 +132,23 @@ apply_treatment <- function(var, treatment) {
     return(var)
   }
 }
+
+treatments <- c("none", "top99", "top99_mean", "top99_median")
+
+treated_all <- list()
+
+for (t in treatments) {
+  treated_df <- sim_data_all %>%
+    group_by(condition) %>%
+    mutate(
+      Treatment = t,
+      TOTEXPYY_treated = apply_treatment(cur_data(), t)
+    ) %>%
+    ungroup()
+  treated_all[[t]] <- treated_df
+}
+
+treated_all <- bind_rows(treated_all)
 
 # --------------------------------
 # 3. Run Simulations
