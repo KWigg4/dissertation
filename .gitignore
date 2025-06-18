@@ -2,9 +2,11 @@
 .Rhistory
 .RData
 .Ruserdata
-
+results/*
+code/_archive/*
 data_processed/*
 data_raw/*
 research_lab/*
 background/*
 research_design*
+*.xlsx
