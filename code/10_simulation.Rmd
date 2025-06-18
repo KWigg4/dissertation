@@ -118,6 +118,7 @@ simulated_summary <- all_sim %>%
     `Median TOTEXPYY` = round(median(TOTEXPYY_mod, na.rm = TRUE), 2),
     `SD TOTEXPYY`     = round(sd(TOTEXPYY_mod, na.rm = TRUE), 2),
     `P99 TOTEXPYY`    = round(quantile(TOTEXPYY_mod, 0.99, na.rm = TRUE), 2),
+    `Max TOTEXPYY`    = max(TOTEXPYY),
     .groups = "drop"
   )
 
