@@ -185,5 +185,19 @@ model_results <- all_sim |>
 
 # ✅ All Done!
 
+```  
+
+
+```{r}
+ggplot(
+	results[[1]], aes(x=TOTEXPYY))+
+	geom_histogram(bins=100)
+
+ggplot(
+	results[[2]],
+	aes(x=TOTEXPYY)) + 
+	geom_histogram(bins=100)
+
 ```
+
 
