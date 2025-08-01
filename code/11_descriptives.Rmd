@@ -14,6 +14,8 @@ pacman::p_load(
 	ggplot2
 	)
 
+set.seed(123)
+
 ```
 
 ```{r}
@@ -22,56 +24,12 @@ pacman::p_load(
 # --------------------------------
 fyc <- readRDS(here::here("data_processed/fyc.RDS")) |> 
 	mutate(ind_gt0 = ifelse(TOTEXPYY > 0, 1, 0)) |> 
-	mutate(log_totexpy = log(TOTEXPYY), na.rm=TRUE) |> 
-	# collapse the categories of insurance type (private any, public only)
-	# 3 means uninsured, and it matched UNINSYY
-	mutate(INSCOV = if_else(INSCOVYY ==3, 0, 1)) |> 
-	# race: 2012 only year they didn't combine 4, 5 for RACEV1X. Combine
-	mutate(
-		RACE = case_when(
-			RACEV1X %in% c(4,5) ~ 4,
-			RACEX %in% c(4,5) ~ 4,
-			TRUE ~ coalesce(RACEX, RACEV1X)
-		)) |> 
-	# don't need weights, not going to do weighted sampling
-	select(
-		, year:DUPERSID
-		, AGELAST
-		, TOTEXPYY
-		, z_TOTEXPYY
-		, ind_gt0
-		, log_totexpy
-		, PANEL
-		, INSCOV
-		, INSCOPE   # it has the same values as INSCOPYY
-		, MARRYYYX
-		, fct_MARRYYYX
-		, FAMSZEYR
-		, PCS42:MCS42
-		, SEX
-		, HISPANX
-		, RACE
-		# , EDUCYR, HIDEG, EDUYRDG, EDRECODE
-		, POVCATYY
-		, fct_POVCATYY
-		, ARTHDX:HIBPDX
-		, RAREDX
-	) |> 
-	mutate(
-		ind_post = ifelse(pre_post=="post", 0, 1),
-		ind_female = ifelse(SEX==2, 1,0),
-		ind_comorb = ifelse(
-		ARTHDX == 1 | ASTHDX==1 | CANCERDX==1 | CHOLDX==1 | 
-			DIABDX==1|HIBPDX==1 | RAREDX==1, 1, 0
-	))
+	mutate(log_totexpy = log(TOTEXPYY), na.rm=TRUE)
 
 fyc_post <- fyc |> 
 	filter(pre_post=="post")
 # 11302 
-
 ```  
-
-## Recreating plots from Deb paper  
 
 How many do I have > $20k? 
 
@@ -90,6 +48,7 @@ fyc_le20k <- fyc |>
 In my dataset, there are `r n_gt20k` values greater than \$20,000 and `r n_gt50k` values greater than \$50,000. 
 
 In Deb's paper, they had n=317 values gt 20k and n=35 values greater than 50k. 
+
 
 ### Histograms  
 
@@ -242,75 +201,12 @@ all_plots <- plot_grid(
 
 ```  
 
-
-## Selecting Xs  
+## X  
 
 ```{r}
-# Get descriptives from entire dataset (if can't do DiD, do post-only later): 
-fyc_cor <- fyc |> 
-	# don't need logged var, ID vars etc. INSCOPE was a subsetting var so don't need that either
-	select(-c(DUID, PID, DUPERSID, z_TOTEXPYY, log_totexpy, PANEL, INSCOPE, 
-						MARRYYYX)) |> 
-	select(where(is.numeric)) 
+# Get descriptives just from post: 
+
 ```
-
-### Descriptives by ind_tx  
-```{r summ_by_tx}
-
-# Descriptives by ind_tx
-pacman::p_load(gtsummary)
-
-tbl_summary(
-	data = fyc_cor,
-	by=ind_tx
-) |> 
-	add_p()
-	
-# Add p-value to see if any are any associated with treatment
-
-# FAMSZEYR
-# HISPANX
-# RACE
-# POVCATYY
-# Some conditions: Could make one indicator for condition and see
-# -- ind_comorb p<.0001 use that instead as proxy (or is PCS42 already enough?)
-
-# Choosing these for now with gender. 
-
-# Or do I want those related to outcome variable of TOTEXPYY? 
-
-```  
-
-
-```{r correlation}
-correlation_matrix <- cor(fyc_cor |> select(-c(year, ind_gt0, ends_with("DX"))))
-# Select Variables 
-correlation_matrix
-
-pacman::p_load(corrplot)
-corrplot(cor(correlation_matrix))
-```  
-
-which are correlated with ind_tx? Or higher outcome variable? (which do I use?) 
-
-
-## Basic tpm model with repeated measures  
-
-```{r}
-
-library(lme4)
-
-prop.table(table(fyc$ind_female)) # 0.53
-prop.table(table(fyc$HISPANX))    # 0.32
-prop.table(table(fyc$ind_tx))     # 0.50
-prop.table(table(fyc$INSCOV))     # 0.69
-summary(fyc$PCS42) # mean 
-```  
-
-
-
-
-
 
 
 
