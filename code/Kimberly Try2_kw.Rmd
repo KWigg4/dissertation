@@ -13,17 +13,16 @@ pacman::p_load(
   tibble
 )
 
-fyc <- read.csv(here::here("data_processed/fyc_processed.csv"))
+# fyc <- read.csv(here::here("data_processed/fyc_processed.csv"))
+# fyc$zPCS42 <- scale(fyc$PCS42)
 # saveRDS(fyc, here::here("data_processed/fyc_processed.RDS"))
 
+
+```  
+
+```{r get_data}
 fyc <- readRDS(here::here("data_processed/fyc_processed.RDS"))
 ```  
-
-```{r}
-
-```  
-
-
 
 
 ```{r}
@@ -56,12 +55,12 @@ simulate_panel_data <- function(
   magnitude_level,          # 1,2,3 -> extreme range
   prop_extreme,             # 0.01, 0.05, 0.10 of ALL rows
   p_treated = 0.5,          # treatment share (balanced by default)
-  target_prob = 0.30,       # overall Pr(ind_gt0==1)
+  target_prob = 0.70,       # overall Pr(ind_gt0==1)
   sigma_u = 0.5,            # SD random intercept (person)
   sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
   rho = 0.8,                # pre/post corr for PCS42
   extreme_alloc = c("proportional","equal"), # spread scheme across cells (in expectation)
-  fill_zero_for_negative = FALSE,            # if TRUE, set TOTEXPYY=0 when ind_gt0==0
+  fill_zero_for_negative = TRUE,            # if TRUE, set TOTEXPYY=0 when ind_gt0==0
   exact_positives = TRUE                     # if TRUE, hit 30% exactly (up to rounding)
 ) {
   extreme_alloc <- match.arg(extreme_alloc)
@@ -136,7 +135,7 @@ simulate_panel_data <- function(
   # Build ind_gt0
   ind_gt0 <- integer(N)
   if (exact_positives) {
-    # exact count to hit 30% (up to rounding)
+    # exact count to hit 70% (up to rounding)
     prob_nonext <- plogis(a0 + lp_cov[nonext])
     K_total  <- as.integer(round(target_prob * N))
     K_nonext <- max(0, K_total - n_ext)
@@ -205,9 +204,9 @@ for (i in seq_len(nrow(sim_conditions))) {
     magnitude_level = cond$magnitude_level,
     prop_extreme    = cond$prop_extreme,
     p_treated       = 0.5,
-    target_prob     = 0.30,
+    target_prob     = 0.70,
     extreme_alloc   = "proportional",  # or "equal"
-    fill_zero_for_negative = FALSE,
+    fill_zero_for_negative = TRUE,
     exact_positives = TRUE
   )
   sim_df$sim_id <- i
@@ -278,18 +277,17 @@ summary(sim1$TOTEXPYY[sim1$extreme_flag==0], na.rm = TRUE)  # typical values not
 
 
 ```{r}
-set.seed(1)
-sim1 <- simulate_panel_data(
-  n               = 1000,
-  magnitude_level = 1,
-  prop_extreme    = 0.01,
-  p_treated       = 0.5,
-  target_prob     = 0.70,
-  extreme_alloc   = "proportional",  # or "equal"
-  exact_positives = FALSE            # << ensures ~30% overall
-)
-
-```
+# set.seed(787614)
+# sim1 <- simulate_panel_data(
+#   n               = 1000,
+#   magnitude_level = 1,
+#   prop_extreme    = 0.01,
+#   p_treated       = 0.5,
+#   target_prob     = 0.70,
+#   extreme_alloc   = "proportional",  # or "equal"
+#   exact_positives = TRUE            # << ensures ~70% overall
+# )
+```  
 
 
 
@@ -313,7 +311,7 @@ cat("\nExtreme TOTEXPYY range: ",
     "\n", sep="")
 
 # basic PASS/FAIL with tiny tolerances
-pass_pos  <- (abs(K/N - 0.30) <= 0.001)              # ~30% exactly
+pass_pos  <- (abs(K/N - 0.70) <= 0.001)              # ~30% exactly
 pass_ext  <- (abs(E/N - p_ext) <= 1/Nexp)            # exact count 1% (20/2000)
 in_range  <- with(sim1, all(TOTEXPYY[extreme_flag==1] >= lower &
                              TOTEXPYY[extreme_flag==1] <= upper, na.rm=TRUE))
@@ -322,7 +320,18 @@ cat("\nEXPECTED: positives ≈", 0.30*Nexp, "and extremes =", p_ext*Nexp, "\n")
 cat("PASS positives:", pass_pos, "\n")
 cat("PASS extremes :", pass_ext, "\n")
 cat("PASS extreme range:", in_range, "\n")
+```  
+
+```{r}
+# Create loop one, mean-preserved top-coding: 
 
 ```
-```
+
+```{r}
+install.packages("tpm")
+```   
+
+
+
+
 

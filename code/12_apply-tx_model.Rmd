@@ -1,0 +1,138 @@
+---
+title: "Apply treatments and Model"
+author: "KW"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message = FALSE)
+
+pacman::p_load(
+	dplyr
+	, twopartm
+)
+```  
+
+```{r get_data}
+sims <- readRDS(here::here("data_processed/final_sim_data.RDS"))
+```  
+
+```{r sim1}
+# untreated dataset 
+# p99_sim1 <- quantile(sim1$TOTEXPYY, probs = 0.99)
+# p99_sim1_mu <- mean(sim1$TOTEXPYY[sim1$TOTEXPYY > p99_sim1], na.rm=TRUE)
+# p99_sim1_med <- median(sim1$TOTEXPYY[sim1$TOTEXPYY > p99_sim1], na.rm=TRUE)
+
+# Create dataset 
+subset <- function(sim_id) {
+	df <- subset(sims, sim_id == {{sim_id}}) |> 
+	mutate(
+		TOTEXPYY_a = ifelse(
+			TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99), 
+			quantile(sim1$TOTEXPYY, probs = 0.99), TOTEXPYY),
+		TOTEXPYY_b = ifelse(TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99),
+												mean(quantile(sim1$TOTEXPYY, probs = 0.99)), TOTEXPYY),
+		TOTEXPYY_c = ifelse(TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99), median(quantile(sim1$TOTEXPYY, probs = 0.99)), TOTEXPYY))
+}
+
+fn_apply_tx <- function(sim_id) {
+  
+  # Subset the data frame for the specific sim_id
+  # Using .data with the pipe is valid
+  .data <- sims |> 
+    filter(sim_id == !!sim_id) # Using !!sim_id to unquote the argument correctly
+  
+  # Dynamically calculate the 99th percentile from the SUBSETTED data
+  p99_value <- quantile(.data$TOTEXPYY, probs = 0.99, na.rm = TRUE)
+  
+  mu_gt99 <- mean(.data[.data > p99_value], na.rm = TRUE)
+  med_gt99 <- median(.data[.data > p99_value], na.rm=TRUE)
+  
+  # Now, create the new variables using the calculated percentile
+  df <- .data %>%
+    mutate(
+      TOTEXPYY_a = ifelse(TOTEXPYY > p99_value, p99_value, TOTEXPYY),
+      TOTEXPYY_b = ifelse(TOTEXPYY > p99_value, mu_gt99, TOTEXPYY),
+      TOTEXPYY_c = ifelse(TOTEXPYY > p99_value, med_gt99, TOTEXPYY)
+    )
+  
+  return(df)
+}
+
+sim1 <- fn_apply_tx(sim_id=1)
+sim2 <- fn_apply_tx(sim_id=2)
+	
+```  
+
+```{r}
+did <- function(sim_ds, dv) {
+	
+	 # Dynamically create the formulas using the `dv` variable
+  formula_part1 <- ind_gt0 ~ ind_tx*ind_post + ind_female + HISPANX + PCS42 + ind_inscov
+  formula_part2 <- as.formula(paste0(dv, " ~ ind_tx*ind_post + ind_female + HISPANX + PCS42 + ind_inscov"))
+  
+  # Part 1: Fit the logistic model for the probability of a non-zero outcome
+  model_part1 <- glm(
+    formula = formula_part1,
+    data = sim_ds,
+    family = binomial(link = "logit")
+  )
+  
+  # Part 2: Fit the Gamma model for the positive outcomes only
+  sim_positive <- sim_ds %>% filter(ind_gt0 == 1)
+  
+  model_part2 <- glm(
+    formula = formula_part2,
+    data = sim_positive,
+    family = Gamma(link = "log")
+  )
+
+# Create four copies of the original data and modify the treatment/time vars
+newdata_control_pre <- {{sim_ds}} %>% mutate(ind_tx = 0, ind_post = 0)
+newdata_control_post <- {{sim_ds}} %>% mutate(ind_tx = 0, ind_post = 1)
+newdata_treated_pre <- {{sim_ds}} %>% mutate(ind_tx = 1, ind_post = 0)
+newdata_treated_post <- {{sim_ds}} %>% mutate(ind_tx = 1, ind_post = 1)
+
+# Predict probabilities (Part 1) and conditional means (Part 2)
+
+# Control, pre-period
+prob_control_pre <- predict(model_part1, newdata = newdata_control_pre, type = "response")
+mean_cond_control_pre <- predict(model_part2, newdata = newdata_control_pre, type = "response")
+avg_control_pre <- mean(prob_control_pre * mean_cond_control_pre, na.rm = TRUE)
+
+# Control, post-period
+prob_control_post <- predict(model_part1, newdata = newdata_control_post, type = "response")
+mean_cond_control_post <- predict(model_part2, newdata = newdata_control_post, type = "response")
+avg_control_post <- mean(prob_control_post * mean_cond_control_post, na.rm = TRUE)
+
+# Treated, pre-period
+prob_treated_pre <- predict(model_part1, newdata = newdata_treated_pre, type = "response")
+mean_cond_treated_pre <- predict(model_part2, newdata = newdata_treated_pre, type = "response")
+avg_treated_pre <- mean(prob_treated_pre * mean_cond_treated_pre, na.rm = TRUE)
+
+# Treated, post-period
+prob_treated_post <- predict(model_part1, newdata = newdata_treated_post, type = "response")
+mean_cond_treated_post <- predict(model_part2, newdata = newdata_treated_post, type = "response")
+avg_treated_post <- mean(prob_treated_post * mean_cond_treated_post, na.rm = TRUE)
+
+# Calculate the DiD estimate
+did_estimate <- (avg_treated_post - avg_treated_pre) - (avg_control_post - avg_control_pre)
+
+print(paste("DiD Estimate (Manual):", did_estimate))
+}
+
+
+did(sim_ds=sim1, dv="TOTEXPYY")
+did(sim_ds=sim1, dv="TOTEXPYY_a")
+did(sim_ds=sim1, dv="TOTEXPYY_b")
+did(sim_ds=sim1, dv="TOTEXPYY_c")
+
+```  
+
+
+
+
+
+
+
