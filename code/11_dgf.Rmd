@@ -113,7 +113,7 @@ simulate_panel_data <- function(
 
   # ----- Part 1: Binary outcome (calibrate to ~30% overall with extremes forced positive) -----
   # Linear predictor WITHOUT intercept on non-extreme rows
-  lp_cov <- 0.5*ind_post + 0.7*ind_tx + 1.2*(ind_post*ind_tx) + 0.2*ind_female - 0.2*HISPANX + 0.1*zPCS + u
+  lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female - 0.2*HISPANX + 0.1*zPCS + u
 
   # Because extremes are forced positive, adjust target on the remaining rows:
   s <- n_ext / N
@@ -154,7 +154,7 @@ simulate_panel_data <- function(
   }
 
   # ----- Part 2: Continuous outcome (on positives) -----
-  lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 1.0*(ind_post*ind_tx) + 0.15*zPCS + 
+  lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 
              0.2*ind_female - 0.1*HISPANX + u
   eps_e <- rnorm(N, 0, sigma_e)
   log_TOT <- lp_cont + eps_e
@@ -336,13 +336,6 @@ saveRDS(
   )
 
 ```  
-
-```{r true_effect}
-
-
-
-
-```
 
 
 

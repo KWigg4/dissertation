@@ -25,23 +25,15 @@ sims <- readRDS(here::here("data_processed/final_sim_data.RDS"))
 # p99_sim1_med <- median(sim1$TOTEXPYY[sim1$TOTEXPYY > p99_sim1], na.rm=TRUE)
 
 # Create dataset 
-subset <- function(sim_id) {
-	df <- subset(sims, sim_id == {{sim_id}}) |> 
-	mutate(
-		TOTEXPYY_a = ifelse(
-			TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99), 
-			quantile(sim1$TOTEXPYY, probs = 0.99), TOTEXPYY),
-		TOTEXPYY_b = ifelse(TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99),
-												mean(quantile(sim1$TOTEXPYY, probs = 0.99)), TOTEXPYY),
-		TOTEXPYY_c = ifelse(TOTEXPYY > quantile(sim1$TOTEXPYY, probs = 0.99), median(quantile(sim1$TOTEXPYY, probs = 0.99)), TOTEXPYY))
-}
-
 fn_apply_tx <- function(sim_id) {
   
   # Subset the data frame for the specific sim_id
   # Using .data with the pipe is valid
   .data <- sims |> 
-    filter(sim_id == !!sim_id) # Using !!sim_id to unquote the argument correctly
+  	# Using !!sim_id to unquote the argument correctly
+    filter(sim_id == !!sim_id) |> 
+  	# standardize the pcs variable bc it's crazy
+  	mutate(zPCS42 = as.vector(scale(PCS42)))
   
   # Dynamically calculate the 99th percentile from the SUBSETTED data
   p99_value <- quantile(.data$TOTEXPYY, probs = 0.99, na.rm = TRUE)
@@ -247,6 +239,11 @@ sim1_untreated_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY")
 sim1a_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_a")
 sim1b_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_b")
 sim1c_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_c")
+
+sim2_untreated_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY")
+sim2a_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_a")
+sim2b_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_b")
+sim2c_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_c")
 ```
 
 
@@ -281,8 +278,8 @@ sim1_raw_bias_pct <- 100 * (sim1_est_did - true_DiD) / true_DiD
 sim1_est_did_v2 <- sim1_untreated_v2$did_est
 sim1_raw_bias_pct_v2 <- 100*(sim1_est_did_v2 - true_DiD) / true_DiD
 
-sim1_est_did_v2 <- sim1_untreated_v2$did_est
-sim1_raw_bias_pct_v2 <- 100*(sim1_est_did_v2 - true_DiD) / true_DiD
+sim2_est_did_v2 <- sim2_untreated_v2$did_est
+sim2_raw_bias_pct_v2 <- 100*(sim2_est_did_v2 - true_DiD) / true_DiD
 ```
 
 
