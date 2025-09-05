@@ -14,12 +14,6 @@ pacman::p_load(
   MASS,   # mvnorm
   tibble
 )
-
-# fyc <- read.csv(here::here("data_processed/fyc_processed.csv"))
-# fyc$zPCS42 <- scale(fyc$PCS42)
-# saveRDS(fyc, here::here("data_processed/fyc_processed.RDS"))
-
-
 ```  
 
 ```{r get_data}
@@ -93,15 +87,16 @@ fyc_wide <- reshape(fyc,
 
 # Step 2: Compute correlation
 cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs")
+
+# correlation for MCS42: 
+cor(fyc_wide$MCS42.0, fyc_wide$MCS42.1, use="complete.obs")
 ```
-
-
 
 
 ```{r}
 # Updates:
 # -- 09/05 KW added INSCOV to models
-
+# -- 09/05: Using MCS42 instead of INSCOV I think... 
 
 # ============================
 # Two-part DiD simulator (updated)
