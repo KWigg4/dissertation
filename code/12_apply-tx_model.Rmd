@@ -64,7 +64,7 @@ sim1_noExt <- fn_apply_tx(sim_id=1, src=sims_noExt)
 ```  
 
 ```{r}
-did <- function(sim_ds, dv, sim_list) {
+fn_tpm <- function(sim_ds, dv, sim_list) {
 	
 	 # Dynamically create the formulas using the `dv` variable
   formula_part1 <- ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV
@@ -86,182 +86,34 @@ did <- function(sim_ds, dv, sim_list) {
     family = Gamma(link = "log")
   )
 
-# Create four copies of the original data and modify the treatment/time vars
-newdata_control_pre <- {{sim_ds}} %>% mutate(ind_tx = 0, ind_post = 0)
-newdata_control_post <- {{sim_ds}} %>% mutate(ind_tx = 0, ind_post = 1)
-newdata_treated_pre <- {{sim_ds}} %>% mutate(ind_tx = 1, ind_post = 0)
-newdata_treated_post <- {{sim_ds}} %>% mutate(ind_tx = 1, ind_post = 1)
-
-# Predict probabilities (Part 1) and conditional means (Part 2)
-
-# Control, pre-period
-prob_control_pre <- predict(
-	model_part1, newdata = newdata_control_pre, type = "response")
-mean_cond_control_pre <- predict(
-	model_part2, newdata = newdata_control_pre, type = "response")
-avg_control_pre <- mean(
-	prob_control_pre * mean_cond_control_pre, na.rm = TRUE)
-
-# Control, post-period
-prob_control_post <- predict(
-	model_part1, newdata = newdata_control_post, type = "response")
-mean_cond_control_post <- predict(
-	model_part2, newdata = newdata_control_post, type = "response")
-avg_control_post <- mean(
-	prob_control_post * mean_cond_control_post, na.rm = TRUE)
-
-# Treated, pre-period
-prob_treated_pre <- predict(
-	model_part1, newdata = newdata_treated_pre, type = "response")
-mean_cond_treated_pre <- predict(
-	model_part2, newdata = newdata_treated_pre, type = "response")
-avg_treated_pre <- mean(
-	prob_treated_pre * mean_cond_treated_pre, na.rm = TRUE)
-
-# Treated, post-period
-prob_treated_post <- predict(
-	model_part1, newdata = newdata_treated_post, type = "response")
-mean_cond_treated_post <- predict(
-	model_part2, newdata = newdata_treated_post, type = "response")
-avg_treated_post <- mean(
-	prob_treated_post * mean_cond_treated_post, na.rm = TRUE)
-
-# Calculate the DiD estimate
-did_estimate <- (avg_treated_post - avg_treated_pre) - (avg_control_post - avg_control_pre)
-
-print(paste("DiD Estimate (Manual):", did_estimate))
-
 	sim_list <- list(
 		model_part1 = model_part1,
-		model_part2 = model_part2,
-		did_est = did_estimate,
-		prob_control_pre=prob_control_pre,
-		mean_cond_control_pre = mean_cond_control_pre,
-		avg_control_pre = avg_control_pre,
-		prob_control_post = prob_control_post,
-		mean_cond_control_post = mean_cond_control_post,
-		avg_control_post=avg_control_post,
-		prob_treated_pre = prob_treated_pre,
-		mean_cond_treated_pre = mean_cond_treated_pre,
-		avg_treated_pre=avg_treated_pre,
-		prob_treated_post=prob_treated_post,
-		mean_cond_treated_post = mean_cond_treated_post,
-		avg_treated_post=avg_treated_post
+		model_part2 = model_part2
 	)
 
 	return(sim_list)
 }
 
 
-sim1_untreated <- did(sim_ds=sim1, dv="TOTEXPYY")
-sim1a <- did(sim_ds=sim1, dv="TOTEXPYY_a")
-sim1b <- did(sim_ds=sim1, dv="TOTEXPYY_b")
-sim1c <- did(sim_ds=sim1, dv="TOTEXPYY_c")
+sim1_bl <- fn_tpm(sim_ds=sim1, dv="TOTEXPYY")
+sim1a <- fn_tpm(sim_ds=sim1, dv="TOTEXPYY_a")
+sim1b <- fn_tpm(sim_ds=sim1, dv="TOTEXPYY_b")
+sim1c <- fn_tpm(sim_ds=sim1, dv="TOTEXPYY_c")
+
+sim1_bl_noExt <- fn_tpm(sim_ds=sim1_noExt, dv="TOTEXPYY")
 
 ```   
 
-```{r coefficient bias}
-
-coef_true <- 
+```{r}
+emp_coef_p1 <- readRDS(here::here("data_processed/emp_coef_p1.RDS"))
+sim1_bl_noExt$model_part1$coefficients
 
 ```
 
 
-```{r}
-# without interaction in model because didn't have it in dgf. 
-# By removing the interaction term, you're estimating main effects only.
-# The DiD logic is preserved because you're manually computing the difference in differences across the four counterfactual cells.
-# This approach aligns with the simulation setup, which doesn’t include an interaction in the dgf.
-
-did_v2 <- function(sim_ds, dv) {
-  
-  # Part 1: Logistic model for probability of non-zero outcome
-  formula_part1 <- ind_gt0 ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV
-  
-  # Part 2: Gamma model for positive outcomes only
-  formula_part2 <- as.formula(paste0(
-    dv, " ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV"
-  ))
-  
-  # Fit Part 1
-  model_part1 <- glm(
-    formula = formula_part1,
-    data = sim_ds,
-    family = binomial(link = "logit")
-  )
-  
-  # Fit Part 2
-  sim_positive <- sim_ds[sim_ds$ind_gt0 == 1, ]
-  model_part2 <- glm(
-    formula = formula_part2,
-    data = sim_positive,
-    family = Gamma(link = "log")
-  )
-  
-  # Create counterfactual datasets
-  newdata_control_pre  <- sim_ds
-  newdata_control_pre$ind_tx <- 0
-  newdata_control_pre$ind_post <- 0
-  
-  newdata_control_post <- sim_ds
-  newdata_control_post$ind_tx <- 0 
-  newdata_control_post$ind_post <- 1
-  
-  newdata_treated_pre  <- sim_ds 
-  newdata_treated_pre$ind_tx <- 1 
-  newdata_treated_pre$ind_post <- 0
-  
-  newdata_treated_post <- sim_ds
-  newdata_treated_post$ind_tx <- 1
-  newdata_treated_post$ind_post <- 1
-  
-  # Predict expected values
-  avg_control_pre  <- mean(
-  	predict(model_part1, newdata_control_pre, type = "response") *
-  		predict(model_part2, newdata_control_pre, type = "response"), na.rm = TRUE)
-  
-  avg_control_post <- mean(
-  	predict(model_part1, newdata_control_post, type = "response") *
-  		predict(model_part2, newdata_control_post, type = "response"), na.rm = TRUE)
-  
-  avg_treated_pre  <- mean(
-  	predict(model_part1, newdata_treated_pre, type = "response") *
-  		predict(model_part2, newdata_treated_pre, type = "response"), na.rm = TRUE)
-  
-  avg_treated_post <- mean(
-  	predict(model_part1, newdata_treated_post, type = "response") *
-  		predict(model_part2, newdata_treated_post, type = "response"), na.rm = TRUE)
-  
-  # Manual DiD estimate
-  did_estimate <- (avg_treated_post - avg_treated_pre) - (avg_control_post - avg_control_pre)
-  print(paste("DiD Estimate (Manual):", round(did_estimate, 4)))
-  
-  # Return results
-  return(list(
-    model_part1 = model_part1,
-    model_part2 = model_part2,
-    did_est = did_estimate,
-    avg_control_pre = avg_control_pre,
-    avg_control_post = avg_control_post,
-    avg_treated_pre = avg_treated_pre,
-    avg_treated_post = avg_treated_post
-  ))
-}
-
-sim1_untreated_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY")
-sim1a_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_a")
-sim1b_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_b")
-sim1c_v2 <- did_v2(sim_ds=sim1, dv="TOTEXPYY_c")
-
-sim2_untreated_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY")
-sim2a_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_a")
-sim2b_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_b")
-sim2c_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_c")
-```  
 
 ```{r}
-sim1_untreated_v2$model_part1$coefficients
-
+emp_coef_p2 <- readRDS(here::here("data_processed/emp_coef_p2.RDS"))
 ```  
 
 ```{r}
@@ -271,40 +123,6 @@ sim1_untreated_v2$model_part2$coefficients
 
 
 
-```{r}
-# to get true effects from dgf so you can calculate bias: 
-# Part 1: Binary model
-lp_logit_cp  <- 0         # control, pre
-lp_logit_cpo <- 0.5       # control, post 
-lp_logit_tp  <- 0.7       # treatment, pre
-lp_logit_tpo <- 0.7 + 0.5 # treatment, post
-
-# Part 2: Continuous model
-lp_gamma_cp  <- 7         # control, pre
-lp_gamma_cpo <- 7 + 0.4   # control, post
-lp_gamma_tp  <- 7 + 0.6   # tx_pre
-lp_gamma_tpo <- 7 + 0.6 + 0.4 # treatment, post
-
-# Expected values
-EY_cp   <- plogis(lp_logit_cp)  * exp(lp_gamma_cp)
-EY_cpo  <- plogis(lp_logit_cpo) * exp(lp_gamma_cpo)
-EY_tp   <- plogis(lp_logit_tp)  * exp(lp_gamma_tp)
-EY_tpo  <- plogis(lp_logit_tpo) * exp(lp_gamma_tpo)
-
-# True DiD
-true_DiD <- (EY_tpo - EY_tp) - (EY_cpo - EY_cp)
-print(paste("True DiD effect:", round(true_DiD, 2)))
-
-sim1_est_did <- sim1_untreated$did_est
-sim1_raw_bias_pct <- 100 * (sim1_est_did - true_DiD) / true_DiD 
-# 546 which is crazy 
-
-sim1_est_did_v2 <- sim1_untreated_v2$did_est
-sim1_raw_bias_pct_v2 <- 100*(sim1_est_did_v2 - true_DiD) / true_DiD
-
-sim2_est_did_v2 <- sim2_untreated_v2$did_est
-sim2_raw_bias_pct_v2 <- 100*(sim2_est_did_v2 - true_DiD) / true_DiD
-```
 
 
 

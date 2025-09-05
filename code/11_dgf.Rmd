@@ -1,6 +1,6 @@
 ---
 title: "Untitled"
-author: "Felix"
+author: "KW"
 date: "8/11/2025"
 output: pdf_document
 ---
@@ -26,7 +26,7 @@ pacman::p_load(
 fyc <- readRDS(here::here("data_processed/fyc_processed.RDS"))
 ```  
 
-```{r get_coef}
+```{r empirical_model}
 
 fn_emp_model <- function(){
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
@@ -64,14 +64,38 @@ emp_model <- fn_emp_model()
 coef_part1 <- emp_model$model_part1$coefficients
 coef_part1
 
+saveRDS(coef_part1,
+     here::here("data_processed/emp_coef_p1.RDS"))
+
 # need below? maybe later when using stochastic compoents
-# sigma_part2 <- sigma(emp_model$model_part2) # residual Stddev (sigma) 6.733
+
 ```
 
 ```{r}
 coef_part2 <- emp_model$model_part2$coefficients
+
+saveRDS(coef_part2,
+     here::here("data_processed/emp_coef_p2.RDS"))
+
 coef_part2
+```  
+
+```{r}
+sigma_part2 <- sigma(emp_model$model_part2) # residual Stddev (sigma) 6.733
+```  
+
+```{r}
+# Step 1: Reshape to wide format
+fyc_wide <- reshape(fyc,
+                   timevar = "ind_post",
+                   idvar = "DUPERSID",
+                   direction = "wide")
+
+# Step 2: Compute correlation
+cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs")
 ```
+
+
 
 
 ```{r}
@@ -109,8 +133,10 @@ simulate_panel_data <- function(
   p_treated = 0.5,          # treatment share (balanced by default)
   target_prob = 0.70,       # overall Pr(ind_gt0==1)
   sigma_u = 0.5,            # SD random intercept (person)
-  sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
-  rho = 0.8,                # pre/post corr for PCS42
+  # sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
+  sigma_e = 6.733036,
+  # rho = 0.8,                # pre/post corr for PCS42
+  rho=0.52,
   extreme_alloc = c("proportional","equal"), # spread scheme across cells (in expectation)
   fill_zero_for_negative = TRUE,    # if TRUE, set TOTEXPYY=0 when ind_gt0==0
   exact_positives = TRUE,           # if TRUE, hit 30% exactly (up to rounding)
@@ -322,7 +348,7 @@ final_sim_data <- bind_rows(all_sim_results)
 # Quick checks
 # ============================
 
-# 1) Did each scenario hit ~30% positives and the correct extreme share?
+# 1) Did each scenario hit ~70% positives and the correct extreme share?
 summary_rates <- final_sim_data %>%
   group_by(sim_id, sample_size, magnitude_level, prop_extreme) %>%
   summarise(
