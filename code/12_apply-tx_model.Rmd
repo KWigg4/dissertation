@@ -16,7 +16,11 @@ pacman::p_load(
 
 ```{r get_data}
 sims <- readRDS(here::here("data_processed/final_sim_data.RDS"))
+
+# without imputed extremes, hoping to see little to no bias
+sims_noExt <- readRDS(here::here("data_processed/final_sim_data_noExtreme.RDS"))
 ```  
+
 
 ```{r sim1}
 # untreated dataset 
@@ -25,11 +29,11 @@ sims <- readRDS(here::here("data_processed/final_sim_data.RDS"))
 # p99_sim1_med <- median(sim1$TOTEXPYY[sim1$TOTEXPYY > p99_sim1], na.rm=TRUE)
 
 # Create dataset 
-fn_apply_tx <- function(sim_id) {
+fn_apply_tx <- function(sim_id, src) {
   
   # Subset the data frame for the specific sim_id
   # Using .data with the pipe is valid
-  .data <- sims |> 
+  .data <- {{src}} |> 
   	# Using !!sim_id to unquote the argument correctly
     filter(sim_id == !!sim_id) |> 
   	# standardize the pcs variable bc it's crazy
@@ -52,8 +56,10 @@ fn_apply_tx <- function(sim_id) {
   return(df)
 }
 
-sim1 <- fn_apply_tx(sim_id=1)
-sim2 <- fn_apply_tx(sim_id=2)
+sim1 <- fn_apply_tx(sim_id=1, src=sims)
+sim2 <- fn_apply_tx(sim_id=2, src=sims)
+
+sim1_noExt <- fn_apply_tx(sim_id=1, src=sims_noExt)
 	
 ```  
 
@@ -61,8 +67,8 @@ sim2 <- fn_apply_tx(sim_id=2)
 did <- function(sim_ds, dv, sim_list) {
 	
 	 # Dynamically create the formulas using the `dv` variable
-  formula_part1 <- ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + PCS42 + ind_inscov
-  formula_part2 <- as.formula(paste0(dv, " ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + PCS42 + ind_inscov"))
+  formula_part1 <- ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV
+  formula_part2 <- as.formula(paste0(dv, " ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + PCS42 + INSCOV"))
   
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
   model_part1 <- glm(
@@ -154,6 +160,13 @@ sim1c <- did(sim_ds=sim1, dv="TOTEXPYY_c")
 
 ```   
 
+```{r coefficient bias}
+
+coef_true <- 
+
+```
+
+
 ```{r}
 # without interaction in model because didn't have it in dgf. 
 # By removing the interaction term, you're estimating main effects only.
@@ -163,11 +176,11 @@ sim1c <- did(sim_ds=sim1, dv="TOTEXPYY_c")
 did_v2 <- function(sim_ds, dv) {
   
   # Part 1: Logistic model for probability of non-zero outcome
-  formula_part1 <- ind_gt0 ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + ind_inscov
+  formula_part1 <- ind_gt0 ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV
   
   # Part 2: Gamma model for positive outcomes only
   formula_part2 <- as.formula(paste0(
-    dv, " ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + ind_inscov"
+    dv, " ~ ind_tx + ind_post + ind_female + HISPANX + PCS42 + INSCOV"
   ))
   
   # Fit Part 1
@@ -244,7 +257,18 @@ sim2_untreated_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY")
 sim2a_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_a")
 sim2b_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_b")
 sim2c_v2 <- did_v2(sim_ds=sim2, dv="TOTEXPYY_c")
+```  
+
+```{r}
+sim1_untreated_v2$model_part1$coefficients
+
+```  
+
+```{r}
+sim1_untreated_v2$model_part2$coefficients
 ```
+
+
 
 
 ```{r}
