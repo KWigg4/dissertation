@@ -1,6 +1,6 @@
 ---
-title: "Untitled"
-author: "Felix"
+title: "dgf"
+author: "KW"
 date: "8/11/2025"
 output: pdf_document
 ---
@@ -25,6 +25,8 @@ These models should be exactly the same as the data generating function and the 
 *Note: For now, start without a stochastic component. We will add later if needed.*  
 
 ```{r empirical_model}
+
+# get coefficients to use in DGF (so you don't have to justify the selection of coefficient)  
 
 fn_emp_model <- function(){
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
