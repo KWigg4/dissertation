@@ -1,13 +1,11 @@
 ---
 title: "Untitled"
-author: "KW"
+author: "Felix"
 date: "8/11/2025"
 output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-## NOTE: WAS 'Kimberly Try2_kw.Rmd', which was adapted from Felix's original
-
 knitr::opts_chunk$set(echo = TRUE)
 pacman::p_load(
   dplyr,
@@ -20,12 +18,18 @@ pacman::p_load(
 fyc <- readRDS(here::here("data_processed/fyc_processed.RDS"))
 ```  
 
+Step 1: Get true coefficients to use in sim by applying tpm to empirical dataset, `fyc`  
+
+These models should be exactly the same as the data generating function and the models used to examine bias of applying treatments to the simulated datasets.  
+
+*Note: For now, start without a stochastic component. We will add later if needed.*  
+
 ```{r empirical_model}
 
 fn_emp_model <- function(){
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
   model_part1 <- glm(
-    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOV,
+    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + zMCS42,
     data = fyc,
     family = binomial(link = "logit")
   )
@@ -34,7 +38,7 @@ fn_emp_model <- function(){
   sim_positive <- fyc %>% filter(ind_gt0 == 1)
   
   model_part2 <- glm(
-    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOV,
+    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + zMCS42,
     data = sim_positive,
     family = Gamma(link = "log")
   )
@@ -72,31 +76,11 @@ saveRDS(coef_part2,
      here::here("data_processed/emp_coef_p2.RDS"))
 
 coef_part2
-```  
+``` 
 
-```{r}
-sigma_part2 <- sigma(emp_model$model_part2) # residual Stddev (sigma) 6.733
-```  
-
-```{r}
-# Step 1: Reshape to wide format
-fyc_wide <- reshape(fyc,
-                   timevar = "ind_post",
-                   idvar = "DUPERSID",
-                   direction = "wide")
-
-# Step 2: Compute correlation
-cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs")
-
-# correlation for MCS42: 
-cor(fyc_wide$MCS42.0, fyc_wide$MCS42.1, use="complete.obs")
-```
 
 
 ```{r}
-# Updates:
-# -- 09/05 KW added INSCOV to models
-# -- 09/05: Using MCS42 instead of INSCOV I think... 
 
 # ============================
 # Two-part DiD simulator (updated)
@@ -128,14 +112,11 @@ simulate_panel_data <- function(
   p_treated = 0.5,          # treatment share (balanced by default)
   target_prob = 0.70,       # overall Pr(ind_gt0==1)
   sigma_u = 0.5,            # SD random intercept (person)
-  # sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
-  sigma_e = 6.733036,
-  # rho = 0.8,                # pre/post corr for PCS42
-  rho=0.52,
+  sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
+  rho = 0.8,                # pre/post corr for PCS42
   extreme_alloc = c("proportional","equal"), # spread scheme across cells (in expectation)
-  fill_zero_for_negative = TRUE,    # if TRUE, set TOTEXPYY=0 when ind_gt0==0
-  exact_positives = TRUE,           # if TRUE, hit 30% exactly (up to rounding)
-  inject_extremes = TRUE
+  fill_zero_for_negative = TRUE,   # if TRUE, set TOTEXPYY=0 when ind_gt0==0
+  exact_positives = TRUE           # if TRUE, hit 70% exactly (up to rounding)
 ) {
   extreme_alloc <- match.arg(extreme_alloc)
 
@@ -149,14 +130,12 @@ simulate_panel_data <- function(
   ind_tx_i     <- rbinom(n, 1, p_treated)
   ind_female_i <- rbinom(n, 1, 0.5)
   HISPANX_i    <- rbinom(n, 1, 0.2)
-  INSCOV_i     <- rbinom(n, 1, 0.3)
-  # INSCOV_i     <- sample(1:3, n, replace = TRUE)
+  INSCOV_i     <- sample(1:3, n, replace = TRUE)
 
   ind_tx     <- rep(ind_tx_i, each = T)
   ind_female <- rep(ind_female_i, each = T)
   HISPANX    <- rep(HISPANX_i, each = T)
-  INSCOV     <- rep(INSCOV_i, each=T)
-  #INSCOV     <- factor(rep(INSCOV_i, each = T))
+  INSCOV     <- factor(rep(INSCOV_i, each = T))
 
   # ----- Time-varying PCS42 with pre/post correlation -----
   Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
@@ -185,24 +164,26 @@ simulate_panel_data <- function(
   n_ext <- length(idx_ext)
   extreme_flag <- integer(N); extreme_flag[idx_ext] <- 1L
 
-  # ----- Part 1: Binary outcome (calibrate to ~70% overall with extremes forced positive) -----
+  # ----- Part 1: Binary outcome (calibrate to ~30% overall with extremes forced positive) -----
   # Linear predictor WITHOUT intercept on non-extreme rows
-  # lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female - 0.2*HISPANX + 0.2*INSCOV + 0.1*zPCS + u
-    lp_cov <- coef_part1["(Intercept)"] +
+  # lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female - 0.2*HISPANX + 0.1*zPCS + u
+  lp_cov <- coef_part1["(Intercept)"] + 
       coef_part1["ind_post"]*ind_post + 
       coef_part1["ind_tx"]*ind_tx + 
       coef_part1["ind_tx:ind_post"]*(ind_post*ind_tx) +
       coef_part1["ind_female"]*ind_female +
       coef_part1["HISPANX"]*HISPANX + 
-      coef_part1["zPCS42"]*zPCS + 
-      coef_part1["INSCOV"]*INSCOV
-
+      coef_part1["PCS42"]*PCS42 + 
+      coef_part1["MCS42"]*MCS42
+  
+  
   # Because extremes are forced positive, adjust target on the remaining rows:
   s <- n_ext / N
   target_rest <- (target_prob - s) / (1 - s)
   eps <- 1e-6
   if (!is.finite(target_rest) || target_rest <= 0 || target_rest >= 1) {
-    warning(sprintf("prop_extreme=%.3f with target_prob=%.3f => target_rest=%.3f; clamping.", prop_extreme, target_prob, target_rest))
+    warning(sprintf("prop_extreme=%.3f with target_prob=%.3f => target_rest=%.3f; clamping.",
+                    prop_extreme, target_prob, target_rest))
     target_rest <- min(max(target_rest, eps), 1 - eps)
   }
 
@@ -235,16 +216,10 @@ simulate_panel_data <- function(
   }
 
   # ----- Part 2: Continuous outcome (on positives) -----
-  lp_cont <- 7 + 
-    coef_part2["ind_post"]*ind_post + 
-    coef_part2["ind_tx"]*ind_tx + 
-    coef_part2["ind_tx:ind_post"]*(ind_tx*ind_post) + 
-    coef_part2["ind_female"]*ind_female + 
-    coef_part2["HISPANX"]*HISPANX + 
-    coef_part2["zPCS42"]*zPCS + 
-    coef_part2["INSCOV"]
-  # lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx - 0.15*zPCS + 
-  #            0.2*ind_female + 0.1*HISPANX + 0.2*INSCOV + u
+  # lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 
+  #            0.2*ind_female - 0.1*HISPANX + u
+  lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 
+             0.2*ind_female - 0.1*HISPANX
   eps_e <- rnorm(N, 0, sigma_e)
   log_TOT <- lp_cont + eps_e
 
@@ -254,14 +229,8 @@ simulate_panel_data <- function(
     TOTEXPYY <- ifelse(ind_gt0 == 1, exp(log_TOT), NA_real_)
   }
 
-  # # Overwrite extremes with magnitude-specific heavy tail
-  # if (n_ext > 0) {
-  #   rng <- extreme_range(magnitude_level)
-  #   TOTEXPYY[idx_ext] <- rlogunif(n_ext, rng[1], rng[2])
-  # }
-  
-  # Inject extremes only if toggle is TRUE
-  if (inject_extremes && n_ext > 0) {
+  # Overwrite extremes with magnitude-specific heavy tail
+  if (n_ext > 0) {
     rng <- extreme_range(magnitude_level)
     TOTEXPYY[idx_ext] <- rlogunif(n_ext, rng[1], rng[2])
   }
@@ -290,31 +259,6 @@ sim_conditions <- expand.grid(
 # Run all scenarios
 # ============================
 set.seed(20250811)
-all_sim_results_noExtreme <- vector("list", nrow(sim_conditions))
-
-for (i in seq_len(nrow(sim_conditions))) {
-  cond <- sim_conditions[i, ]
-  cat(sprintf("Sim %02d | n=%d, mag=%d, p_ext=%.02f\n",
-              i, cond$n, cond$magnitude_level, cond$prop_extreme))
-  sim_df <- simulate_panel_data(
-    n               = cond$n,
-    magnitude_level = cond$magnitude_level,
-    prop_extreme    = cond$prop_extreme,
-    p_treated       = 0.5,
-    target_prob     = 0.70,
-    extreme_alloc   = "proportional",  # or "equal"
-    fill_zero_for_negative = TRUE,
-    exact_positives = TRUE,
-    inject_extremes = FALSE
-  )
-  sim_df$sim_id <- i
-  sim_df$sample_size <- cond$n
-  all_sim_results_noExtreme[[i]] <- sim_df
-}
-
-final_sim_data_noExtreme <- bind_rows(all_sim_results_noExtreme)
-
-# WITH injected extreme values: 
 all_sim_results <- vector("list", nrow(sim_conditions))
 
 for (i in seq_len(nrow(sim_conditions))) {
@@ -329,8 +273,7 @@ for (i in seq_len(nrow(sim_conditions))) {
     target_prob     = 0.70,
     extreme_alloc   = "proportional",  # or "equal"
     fill_zero_for_negative = TRUE,
-    exact_positives = TRUE,
-    inject_extremes = TRUE
+    exact_positives = TRUE
   )
   sim_df$sim_id <- i
   sim_df$sample_size <- cond$n
@@ -343,7 +286,7 @@ final_sim_data <- bind_rows(all_sim_results)
 # Quick checks
 # ============================
 
-# 1) Did each scenario hit ~70% positives and the correct extreme share?
+# 1) Did each scenario hit ~30% positives and the correct extreme share?
 summary_rates <- final_sim_data %>%
   group_by(sim_id, sample_size, magnitude_level, prop_extreme) %>%
   summarise(
@@ -400,16 +343,16 @@ summary(sim1$TOTEXPYY[sim1$extreme_flag==0], na.rm = TRUE)  # typical values not
 
 
 ```{r}
-# set.seed(787614)
-# sim1 <- simulate_panel_data(
-#   n               = 1000,
-#   magnitude_level = 1,
-#   prop_extreme    = 0.01,
-#   p_treated       = 0.5,
-#   target_prob     = 0.70,
-#   extreme_alloc   = "proportional",  # or "equal"
-#   exact_positives = TRUE            # << ensures ~70% overall
-# )
+set.seed(787614)
+sim1 <- simulate_panel_data(
+  n               = 1000,
+  magnitude_level = 1,
+  prop_extreme    = 0.01,
+  p_treated       = 0.5,
+  target_prob     = 0.70,
+  extreme_alloc   = "proportional",  # or "equal"
+  exact_positives = TRUE            # << ensures ~70% overall
+)
 ```  
 
 
@@ -434,7 +377,7 @@ cat("\nExtreme TOTEXPYY range: ",
     "\n", sep="")
 
 # basic PASS/FAIL with tiny tolerances
-pass_pos  <- (abs(K/N - 0.70) <= 0.001)              # ~30% exactly
+pass_pos  <- (abs(K/N - 0.30) <= 0.001)              # ~30% exactly
 pass_ext  <- (abs(E/N - p_ext) <= 1/Nexp)            # exact count 1% (20/2000)
 in_range  <- with(sim1, all(TOTEXPYY[extreme_flag==1] >= lower &
                              TOTEXPYY[extreme_flag==1] <= upper, na.rm=TRUE))
@@ -445,18 +388,29 @@ cat("PASS extremes :", pass_ext, "\n")
 cat("PASS extreme range:", in_range, "\n")
 ```  
 
-```{r save}
-saveRDS(
-  final_sim_data,
-  here::here("data_processed/final_sim_data.RDS")
+```{r check_bias}
+# check for bias in untreated simulated data: 
+
+# Reference: dgf models: 
+#lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female - 0.2*HISPANX + 0.1*zPCS 
+#lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 0.2*ind_female - 0.1*HISPANX
+
+ model_part1 <- glm(
+    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOV,
+    data = fyc,
+    family = binomial(link = "logit")
+  )
+  
+  # Part 2: Fit the Gamma model for the positive outcomes only
+  sim_positive <- fyc %>% filter(ind_gt0 == 1)
+  
+  model_part2 <- glm(
+    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOV,
+    data = sim_positive,
+    family = Gamma(link = "log")
   )
 
-saveRDS(
-  final_sim_data_noExtreme,
-  here::here("data_processed/final_sim_data_noExtreme.RDS")
-)
-
-```  
+```
 
 
 
