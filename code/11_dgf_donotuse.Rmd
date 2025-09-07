@@ -14,18 +14,23 @@ pacman::p_load(
   MASS,   # mvnorm
   tibble
 )
+
+options(scipen = 999)
 ```  
 
-```{r get_data}
-fyc <- readRDS(here::here("data_processed/fyc_processed.RDS"))
+```{r 1_get_data}
+fyc <- readRDS(here::here("data_processed/fyc_processed.RDS")) 
 ```  
 
-```{r empirical_model}
+
+```{r 2_empirical_model}
+
+# to get intercept, coefficients for the data-generating function (so you don't have to justify choice)
 
 fn_emp_model <- function(){
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
   model_part1 <- glm(
-    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOV,
+    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOVYY,
     data = fyc,
     family = binomial(link = "logit")
   )
@@ -34,7 +39,7 @@ fn_emp_model <- function(){
   sim_positive <- fyc %>% filter(ind_gt0 == 1)
   
   model_part2 <- glm(
-    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOV,
+    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOVYY,
     data = sim_positive,
     family = Gamma(link = "log")
   )
@@ -44,35 +49,32 @@ fn_emp_model <- function(){
     model_part2 = model_part2
   )
   
+  saveRDS(model_part1$coef_part1, here::here("data_processed/emp_coef_p1.RDS"))
+  saveRDS(model_part1$coef_part2, here::here("data_processed/emp_coef_p2.RDS"))
+  
   return(list)
   
 }
   
 emp_model <- fn_emp_model()
 
-```  
+```   
+
 
 ```{r}
-# get coefficients 
-# Extract coefficients
-coef_part1 <- emp_model$model_part1$coefficients
-coef_part1
+library(broom)
 
-saveRDS(coef_part1,
-     here::here("data_processed/emp_coef_p1.RDS"))
+tidy(emp_model$model_part1)  |> 
+  mutate(across(where(is.numeric), ~round(.x, 4)))
+```  
 
-# need below? maybe later when using stochastic compoents
 
+```{r}
+library(broom)
+tidy(emp_model$model_part2)  |> 
+  mutate(across(where(is.numeric), ~round(.x, 4)))
 ```
 
-```{r}
-coef_part2 <- emp_model$model_part2$coefficients
-
-saveRDS(coef_part2,
-     here::here("data_processed/emp_coef_p2.RDS"))
-
-coef_part2
-```  
 
 ```{r}
 sigma_part2 <- sigma(emp_model$model_part2) # residual Stddev (sigma) 6.733
@@ -80,27 +82,11 @@ sigma_part2 <- sigma(emp_model$model_part2) # residual Stddev (sigma) 6.733
 
 ```{r}
 # Step 1: Reshape to wide format
-fyc_wide <- reshape(fyc,
-                   timevar = "ind_post",
-                   idvar = "DUPERSID",
-                   direction = "wide")
-
-# Step 2: Compute correlation
-cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs") #0.5223
-cor(fyc_wide$zPCS42.0, fyc_wide$zPCS42.1, use="complete.obs") #0.5223
-
-# correlation for MCS42: 
-cor(fyc_wide$MCS42.0, fyc_wide$MCS42.1, use="complete.obs")   # 0.4704
-cor(fyc_wide$zMCS42.0, fyc_wide$zMCS42.1, use="complete.obs") # 0.4704
 
 ```
 
 
 ```{r}
-# Updates:
-# -- 09/05 KW added INSCOV to models
-# -- 09/05: Using MCS42 instead of INSCOV I think... 
-
 # ============================
 # Two-part DiD simulator (updated)
 # ============================
@@ -131,7 +117,7 @@ simulate_panel_data <- function(
   p_treated = 0.5,          # treatment share (balanced by default)
   target_prob = 0.70,       # overall Pr(ind_gt0==1)
   sigma_u = 0.5,            # SD random intercept (person)
-  # sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
+  sigma_e = 0.4,            # residual SD for log(TOTEXPYY)
   sigma_e = 6.733036,
   # rho = 0.8,                # pre/post corr for PCS42
   rho=0.52,
@@ -197,7 +183,7 @@ simulate_panel_data <- function(
       coef_part1["ind_female"]*ind_female +
       coef_part1["HISPANX"]*HISPANX + 
       coef_part1["zPCS42"]*zPCS + 
-      coef_part1["INSCOV"]*INSCOV
+      coef_part1["INSCOVYY"]*INSCOV
 
   # Because extremes are forced positive, adjust target on the remaining rows:
   s <- n_ext / N
@@ -244,7 +230,7 @@ simulate_panel_data <- function(
     coef_part2["ind_female"]*ind_female + 
     coef_part2["HISPANX"]*HISPANX + 
     coef_part2["zPCS42"]*zPCS + 
-    coef_part2["INSCOV"]
+    coef_part2["INSCOVYY"]
   # lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx - 0.15*zPCS + 
   #            0.2*ind_female + 0.1*HISPANX + 0.2*INSCOV + u
   eps_e <- rnorm(N, 0, sigma_e)

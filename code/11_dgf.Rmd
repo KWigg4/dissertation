@@ -24,14 +24,14 @@ These models should be exactly the same as the data generating function and the 
 
 *Note: For now, start without a stochastic component. We will add later if needed.*  
 
-```{r empirical_model}
+```{r 2_empirical_model}
 
-# get coefficients to use in DGF (so you don't have to justify the selection of coefficient)  
+# to get intercept, coefficients for the data-generating function (so you don't have to justify choice)
 
 fn_emp_model <- function(){
   # Part 1: Fit the logistic model for the probability of a non-zero outcome
   model_part1 <- glm(
-    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + zMCS42,
+    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOVYY,
     data = fyc,
     family = binomial(link = "logit")
   )
@@ -40,7 +40,7 @@ fn_emp_model <- function(){
   sim_positive <- fyc %>% filter(ind_gt0 == 1)
   
   model_part2 <- glm(
-    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + zMCS42,
+    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOVYY,
     data = sim_positive,
     family = Gamma(link = "log")
   )
@@ -50,6 +50,9 @@ fn_emp_model <- function(){
     model_part2 = model_part2
   )
   
+  saveRDS(model_part1$coef_part1, here::here("data_processed/emp_coef_p1.RDS"))
+  saveRDS(model_part1$coef_part2, here::here("data_processed/emp_coef_p2.RDS"))
+  
   return(list)
   
 }
@@ -58,65 +61,39 @@ emp_model <- fn_emp_model()
 
 ```  
 
+
 ```{r}
-# get coefficients 
-# Extract coefficients
-coef_part1 <- emp_model$model_part1$coefficients
-coef_part1
+library(broom)
 
-saveRDS(coef_part1,
-     here::here("data_processed/emp_coef_p1.RDS"))
+tidy(emp_model$model_part1)  |> 
+  mutate(across(where(is.numeric), ~round(.x, 4)))
+```  
 
-# need below? maybe later when using stochastic compoents
 
+```{r}
+library(broom)
+tidy(emp_model$model_part2)  |> 
+  mutate(across(where(is.numeric), ~round(.x, 4)))
 ```
-
-```{r}
-coef_part2 <- emp_model$model_part2$coefficients
-
-saveRDS(coef_part2,
-     here::here("data_processed/emp_coef_p2.RDS"))
-
-coef_part2
-``` 
+ 
 ```{r}
 
-library(tidyr)
-pcs_0 <- fyc |> 
-  filter(ind_post==0) |> 
-  dplyr::select(DUPERSID, pcs_pre=PCS42) |> 
-  group_by(DUPERSID) |> 
-  mutate(n=n())
-pcs_1 <- fyc |> 
-  filter(ind_post==1) |> 
-  dplyr::select(DUPERSID, pcs_post=PCS42)
-pcs_wide <- pcs_0 |> 
-  full_join(pcs_1)
-
-# Step 4: Calculate correlation between pre (time_0) and post (time_1)
-correlation <- cor(pcs_wide$time_0, pcs_wide$time_1, use = "complete.obs")
-print(correlation)
-
-pcs_wide <- tidyr::pivot_wider(
-  fyc,
-  id_cols = DUPERSID,  # replace with actual subject ID column
-  names_from = ind_post,     # replace with actual time column
-  values_from = PCS42)   # replace with actual PCS42 value column
-
-# Step 4: Calculate correlation
-correlation <- cor(pcs_wide$pre, pcs_wide$post, use = "complete.obs")
-print(correlation)
+fyc_wide <- reshape(fyc,
+                   timevar = "ind_post",
+                   idvar = "DUPERSID",
+                   direction = "wide")
 
 # Step 2: Compute correlation
-cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs") #0.5223
+cor(fyc_wide$PCS42.0, fyc_wide$PCS42.1, use = "complete.obs") #0.425434
 
 # correlation for MCS42: 
-cor(fyc_wide$MCS42.0, fyc_wide$MCS42.1, use="complete.obs")   # 0.4704
+cor(fyc_wide$MCS42.0, fyc_wide$MCS42.1, use="complete.obs")   # 0.4049928
+
 
 ```
 
 
-```{r simulator}
+```{r 3_simulator}
 
 # ============================
 # Two-part DiD simulator (updated)
@@ -149,7 +126,7 @@ simulate_panel_data <- function(
   target_prob = 0.70,       # overall Pr(ind_gt0==1)
   sigma_u = 0.5,            # SD random intercept (person)
   sigma_e = 0.3,            # residual SD for log(TOTEXPYY)
-  rho = 0.5,                # pre/post corr for PCS42
+  rho = 0.4,                # pre/post corr for PCS42
   extreme_alloc = c("proportional","equal"), # spread scheme across cells (in expectation)
   fill_zero_for_negative = TRUE,   # if TRUE, set TOTEXPYY=0 when ind_gt0==0
   exact_positives = TRUE           # if TRUE, hit 70% exactly (up to rounding)
@@ -178,12 +155,6 @@ simulate_panel_data <- function(
   pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
   PCS42 <- as.vector(t(pcs))        # interleave pre, post
   zPCS  <- (PCS42 - 50) / 10        # standardize to avoid huge non-extreme values
-  
-    # ----- Time-varying MCS42 with pre/post correlation -----
-  # Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
-  mcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
-  MCS42 <- as.vector(t(mpcs))        # interleave pre, post
-  zMCS  <- (MCS42 - 50) / 10        # standardize to avoid huge non-extreme values
 
   # ----- Random intercept per person -----
   u_i <- rnorm(n, 0, sigma_u)
@@ -209,14 +180,14 @@ simulate_panel_data <- function(
   # ----- Part 1: Binary outcome (calibrate to ~30% overall with extremes forced positive) -----
   # Linear predictor WITHOUT intercept on non-extreme rows
   # lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female - 0.2*HISPANX + 0.1*zPCS + u
-  lp_cov <- coef_part1["(Intercept)"] + 
-      coef_part1["ind_post"]*ind_post + 
-      coef_part1["ind_tx"]*ind_tx + 
-      coef_part1["ind_tx:ind_post"]*(ind_post*ind_tx) +
-      coef_part1["ind_female"]*ind_female +
-      coef_part1["HISPANX"]*HISPANX + 
-      coef_part1["zPCS42"]*zPCS + 
-      coef_part1["MCS42"]*MCS42
+  lp_cov <- emp_model$model_part1$coef_part1["(Intercept)"] + 
+      emp_model$model_part1$coef_part1["ind_post"]*ind_post + 
+      emp_model$model_part1$coef_part1["ind_tx"]*ind_tx + 
+      emp_model$model_part1$coef_part1["ind_tx:ind_post"]*(ind_post*ind_tx) +
+      emp_model$model_part1$coef_part1["ind_female"]*ind_female +
+      emp_model$model_part1$coef_part1["HISPANX"]*HISPANX + 
+      emp_model$model_part1$coef_part1["zPCS42"]*zPCS + 
+      emp_model$model_part1$coef_part1["INSCOVYY"]*INSCOV
   
   
   # Because extremes are forced positive, adjust target on the remaining rows:
@@ -260,14 +231,14 @@ simulate_panel_data <- function(
   # ----- Part 2: Continuous outcome (on positives) -----
   # lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 
   #            0.2*ind_female - 0.1*HISPANX + u
-    lp_cont <- 7 + 
-    coef_part2["ind_post"]*ind_post + 
-    coef_part2["ind_tx"]*ind_tx + 
-    coef_part2["ind_tx:ind_post"]*(ind_tx*ind_post) + 
-    coef_part2["ind_female"]*ind_female + 
-    coef_part2["HISPANX"]*HISPANX + 
-    coef_part2["zPCS42"]*zPCS + 
-    coef_part2["zMCS42"]*zMCS
+    lp_cont <-  emp_model$model_part1$coef_part1["(Intercept)"] +  
+    emp_model$model_part2$coef_part2["ind_post"]*ind_post + 
+    emp_model$model_part2$coef_part2["ind_tx"]*ind_tx + 
+    emp_model$model_part2$coef_part2["ind_tx:ind_post"]*(ind_tx*ind_post) + 
+    emp_model$model_part2$coef_part2["ind_female"]*ind_female + 
+    emp_model$model_part2$coef_part2["HISPANX"]*HISPANX + 
+    emp_model$model_part2$coef_part2["zPCS42"]*zPCS  + 
+    emp_model$model_part2$coef_part1["INSCOVYY"]*INSCOV
   
   eps_e <- rnorm(N, 0, sigma_e)
   log_TOT <- lp_cont + eps_e
@@ -437,7 +408,7 @@ cat("PASS extremes :", pass_ext, "\n")
 cat("PASS extreme range:", in_range, "\n")
 ```  
 
-```{r check_bias}
+```{r 4_check_bias}
 # check for bias in untreated simulated data: 
 
 # Reference: dgf models: 
@@ -445,21 +416,32 @@ cat("PASS extreme range:", in_range, "\n")
 #lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS + 0.2*ind_female - 0.1*HISPANX
 
  model_part1 <- glm(
-    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOV,
-    data = fyc,
+    formula = ind_gt0 ~ ind_tx*ind_post + ind_tx + ind_post + ind_female + HISPANX + zPCS42 + INSCOVYY,
+    data = sim1,
     family = binomial(link = "logit")
   )
   
   # Part 2: Fit the Gamma model for the positive outcomes only
-  sim_positive <- fyc %>% filter(ind_gt0 == 1)
+  sim_positive <- sim1 %>% filter(ind_gt0 == 1)
   
   model_part2 <- glm(
-    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOV,
+    formula = TOTEXPYY ~ ind_tx*ind_post + ind_tx + ind_post+ ind_female + HISPANX + zPCS42 + INSCOVYY,
     data = sim_positive,
     family = Gamma(link = "log")
   )
+```  
 
+```{r compare_lr}
+# coefficients used for simulation: 
+emp_model$model_part1$coefficients
+```  
+
+```{r}
+# coefficients from model ran on sim1: 
+model_part1$coefficients
 ```
+
+
 
 
 
