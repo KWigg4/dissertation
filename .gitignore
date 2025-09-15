@@ -10,3 +10,7 @@ research_lab/*
 background/*
 research_design*
 *.xlsx
+*.docx
+data_raw_ipums/*
+*.png
+
