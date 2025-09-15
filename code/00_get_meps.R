@@ -13,8 +13,11 @@ pacman::p_load(
   dplyr
 )
 
+conflicted::conflicts_prefer(dplyr::select)
+conflicted::conflicts_prefer(dplyr::filter)
 
 # dn_2011 = read_MEPS(year = 2011, type = "FYC")
+dn_2011 |> select(starts_with("INSCOP")) |> colnames()
 # how to get one full dataset if needed:
 # fyc2008_raw_full <- read_MEPS(year=2008, type = "FYC")
 
@@ -168,6 +171,8 @@ fyc <- local({
   dats <- lapply(fyc_files, readRDS)
   names(dats) <- c("fyc08_raw", "fyc09_raw", "fyc10_raw", "fyc11_raw",
                    "fyc12_raw", "fyc13_raw", "fyc14_raw")
+
+  purrr::map(dats, nrow)
 
   fyc08 <- dats$fyc08_raw |>
     rename(
@@ -333,12 +338,15 @@ write.csv(
 saveRDS(fyc, here::here("data_processed/fyc_processed.RDS"))
 
 
-# some people are in post twice? Like 4k are in group >1x
+# some people are in post twice? Like 3797 are in group >1x
+fyc <- readRDS(here::here("data_processed/fyc_processed.RDS"))
 fyc |>
 	group_by(DUPERSID, pre_post) |>
 	summarize(n=n()) |>
 	filter(n>1) |>
 	arrange(DUPERSID)
+
+# keep only first post-year for each DUPERSID by group
 
 
 

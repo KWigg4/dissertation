@@ -1,0 +1,385 @@
+---
+title: "Untitled"
+author: "Felix"
+date: "9/15/2025"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(MASS)
+library(dplyr)
+library(tibble)
+library(broom)
+library(purrr)
+library(ggplot2)
+
+```
+
+
+```{r}
+# log-uniform draw for extremes
+rlogunif <- function(n, min_val, max_val) {
+  if (n <= 0) return(numeric(0))
+  exp(runif(n, log(min_val), log(max_val)))
+}
+
+# range for extreme values
+extreme_range <- function(mag_level) {
+  switch(as.character(mag_level),
+         "1" = c(5e4, 1e6),
+         "2" = c(5e4, 2e6),
+         "3" = c(5e4, 3e6),
+         stop("Use magnitude_level 1, 2, or 3.")
+  )
+}
+
+# main simulator: two-part Gamma with extremes
+simulate_panel_data <- function(
+  n, magnitude_level, prop_extreme = 0.01, p_treated = 0.5,
+  sigma_u = 0.5, rho = 0.8, extreme_alloc = c("proportional","equal"),
+  gamma_shape = 5
+) {
+  extreme_alloc <- match.arg(extreme_alloc)
+  T <- 2; N <- n * T
+  ids <- rep(1:n, each = T)
+  ind_post <- rep(0:1, times = n)
+
+  # person-level covariates
+  ind_tx_i     <- rbinom(n, 1, p_treated)
+  ind_female_i <- rbinom(n, 1, 0.5)
+  HISPANX_i    <- rbinom(n, 1, 0.2)
+  INSCOV_i     <- sample(1:3, n, replace = TRUE)
+
+  ind_tx     <- rep(ind_tx_i, each = T)
+  ind_female <- rep(ind_female_i, each = T)
+  HISPANX    <- rep(HISPANX_i, each = T)
+  INSCOV     <- factor(rep(INSCOV_i, each = T))
+
+  # time-varying PCS42 with correlation
+  Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
+  pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
+  PCS42 <- as.vector(t(pcs))
+  zPCS  <- (PCS42 - 50) / 10
+
+  # random intercept
+  u_i <- rnorm(n, 0, sigma_u)
+  u   <- u_i[ids]
+
+  # Part 1: logistic for >0
+  lp_cov <- 0.5*ind_post + 0.7*ind_tx + 0.2*ind_female -
+            0.2*HISPANX + 0.1*zPCS + u
+  pr_pos <- plogis(lp_cov)
+  ind_gt0 <- rbinom(N, 1, pr_pos)
+
+  # Part 2: Gamma for positives
+  lp_cont <- 7 + 0.4*ind_post + 0.6*ind_tx + 0.15*zPCS +
+             0.2*ind_female - 0.1*HISPANX + u
+  mu <- exp(lp_cont)
+  shape <- gamma_shape
+  scale <- mu / shape
+
+  TOTEXPYY <- rep(0, N)
+  TOTEXPYY[ind_gt0 == 1] <- rgamma(sum(ind_gt0), shape = shape,
+                                   scale = scale[ind_gt0 == 1])
+
+  # extremes
+  K_ext <- rbinom(1, N, prop_extreme)
+  if (K_ext > 0) {
+    weights_cell <- if (extreme_alloc == "equal") rep(1, 4) else
+      as.integer(table(factor((ind_post*2)+ind_tx+1L, levels=1:4)))
+    w_row <- as.numeric(weights_cell)[(ind_post*2)+ind_tx+1L]
+    idx_ext <- sample.int(N, size = K_ext, replace = FALSE, prob = w_row)
+    rng <- extreme_range(magnitude_level)
+    TOTEXPYY[idx_ext] <- rlogunif(K_ext, rng[1], rng[2])
+  } else idx_ext <- integer(0)
+
+  tibble(
+    DUPERSID = factor(ids),
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, INSCOV,
+    ind_gt0  = ind_gt0,
+    TOTEXPYY = TOTEXPYY,
+    extreme_flag = as.integer(seq_len(N) %in% idx_ext),
+    magnitude_level = magnitude_level,
+    prop_extreme = prop_extreme
+  )
+}
+
+```
+
+
+```{r}
+fit_three_models <- function(
+  n = 1000, magnitude_level = 1, prop_extreme = 0.05, gamma_shape = 5
+) {
+  dat <- simulate_panel_data(n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
+
+  # Logistic
+  fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                   data = dat, family = binomial)
+  tidy_logit <- tidy(fit_logit) %>%
+    select(term, estimate, std.error, p.value) %>%
+    mutate(model = "Logistic (any >0)")
+
+  # Gamma GLM
+  fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                   data = dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0),
+                   family = Gamma(link = "log"),
+                   control = glm.control(maxit = 100, epsilon = 1e-8))
+  tidy_gamma <- tidy(fit_gamma) %>%
+    select(term, estimate, std.error, p.value) %>%
+    mutate(model = "Gamma GLM (positive)")
+
+  # Log-OLS
+  fit_logols <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                   data = dat)
+  tidy_logols <- tidy(fit_logols) %>%
+    select(term, estimate, std.error, p.value) %>%
+    mutate(model = "Log-OLS (all spending)")
+
+  bind_rows(tidy_logit, tidy_gamma, tidy_logols)
+}
+
+# Example run
+set.seed(123)
+fit_three_models(n = 1000, prop_extreme = 0.05, gamma_shape = 5)
+
+```
+
+
+#Monte Carlo
+
+```{r}
+# Safe Gamma wrapper
+safe_gamma <- function(dat) {
+  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  if (nrow(dat2) < 10) return(c(NA, NA))
+  out <- tryCatch({
+    fit <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+               data = dat2, family = Gamma(link = "log"),
+               control = glm.control(maxit = 100, epsilon = 1e-8))
+    coef(summary(fit))["ind_post:ind_tx", c("Estimate","Std. Error")]
+  }, error = function(e) c(NA, NA))
+  out
+}
+
+# One replicate
+run_one <- function(n = 1000, magnitude_level = 1, prop_extreme = 0.01, gamma_shape = 5) {
+  dat <- simulate_panel_data(n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
+
+  # Logistic
+  fit1 <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+              data = dat, family = binomial)
+  c1 <- coef(summary(fit1))["ind_post:ind_tx", c("Estimate","Std. Error")]
+
+  # Gamma
+  c2 <- safe_gamma(dat)
+
+  # Log-OLS
+  fit3 <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+             data = dat)
+  c3 <- coef(summary(fit3))["ind_post:ind_tx", c("Estimate","Std. Error")]
+
+  list(logit = c1, gamma = c2, logols = c3)
+}
+
+# Monte Carlo loop
+set.seed(2025)
+B <- 500
+results <- replicate(B, run_one(), simplify = FALSE)
+
+extract <- function(model) {
+  est <- sapply(results, function(x) x[[model]][1])
+  se  <- sapply(results, function(x) x[[model]][2])
+  tibble(est = est, se = se, model = model)
+}
+
+df <- bind_rows(
+  extract("logit"),
+  extract("gamma"),
+  extract("logols")
+)
+
+theta_true <- 0
+
+summ <- df %>%
+  group_by(model) %>%
+  summarise(
+    mean_est = mean(est, na.rm = TRUE),
+    bias     = mean(est - theta_true, na.rm = TRUE),
+    var_emp  = var(est, na.rm = TRUE),
+    rmse     = sqrt(mean((est - theta_true)^2, na.rm = TRUE)),
+    coverage = mean((est - 1.96*se <= theta_true) & (theta_true <= est + 1.96*se), na.rm = TRUE),
+    n_fail   = sum(is.na(est)),
+    fail_pct = mean(is.na(est))*100,
+    .groups = "drop"
+  )
+
+summ
+```
+
+
+```{r}
+set.seed(2025)
+dat <- simulate_panel_data(n = 1000, magnitude_level = 1,
+                           prop_extreme = 0.05, gamma_shape = 5)
+
+# Full distribution (log scale)
+ggplot(dat, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, color = "black", fill = "skyblue") +
+  scale_x_log10(labels = scales::comma) +
+  labs(title = "Distribution of TOTEXPYY (log scale)",
+       x = "Spending (log scale)", y = "Count") +
+  theme_minimal()
+
+# Zoomed-in (<100k)
+ggplot(dat, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, color = "black", fill = "orange") +
+  scale_x_continuous(limits = c(0, 100000), labels = scales::comma) +
+  labs(title = "Zoomed-in Distribution of Spending (< 100k)",
+       x = "Spending", y = "Count") +
+  theme_minimal()
+
+```
+
+```{r}
+# --- scenario grid values ---
+prop_extreme_vals <- c(0.01, 0.05, 0.10)
+gamma_shape_vals  <- c(2, 5, 10)
+
+# --- run MC for a single scenario ---
+run_mc <- function(B = 500, n = 1000, magnitude_level = 1,
+                   prop_extreme, gamma_shape) {
+  results <- replicate(B, run_one(n, magnitude_level,
+                                  prop_extreme, gamma_shape),
+                       simplify = FALSE)
+  
+  extract <- function(model) {
+    est <- sapply(results, function(x) x[[model]][1])
+    se  <- sapply(results, function(x) x[[model]][2])
+    tibble(est = est, se = se, model = model)
+  }
+  
+  df <- bind_rows(
+    extract("logit"),
+    extract("gamma"),
+    extract("logols")
+  ) %>% mutate(prop_extreme = prop_extreme,
+               gamma_shape = gamma_shape)
+  
+  df
+}
+
+# --- loop across scenario grid ---
+grid <- expand.grid(prop_extreme = prop_extreme_vals,
+                    gamma_shape = gamma_shape_vals)
+
+set.seed(2025)
+all_df <- purrr::map2_dfr(grid$prop_extreme,
+                          grid$gamma_shape,
+                          ~ run_mc(B = 500,
+                                   prop_extreme = .x,
+                                   gamma_shape = .y))
+
+# --- summarise results ---
+theta_true <- 0
+
+summ_grid <- all_df %>%
+  group_by(model, prop_extreme, gamma_shape) %>%
+  summarise(
+    mean_est = mean(est, na.rm = TRUE),
+    bias     = mean(est - theta_true, na.rm = TRUE),
+    var_emp  = var(est, na.rm = TRUE),
+    rmse     = sqrt(mean((est - theta_true)^2, na.rm = TRUE)),
+    coverage = mean((est - 1.96*se <= theta_true) &
+                    (theta_true <= est + 1.96*se), na.rm = TRUE),
+    n_fail   = sum(is.na(est)),
+    fail_pct = mean(is.na(est))*100,
+    .groups = "drop"
+  )
+
+print(summ_grid)
+
+```
+
+```{r}
+
+# --- true parameter values ---
+true_logit <- c("(Intercept)"=NA,  # intercept not set in DGP
+                "ind_post"=0.5,
+                "ind_tx"=0.7,
+                "ind_female"=0.2,
+                "HISPANX"=-0.2,
+                "PCS42"=0.1,
+                "ind_post:ind_tx"=0)
+
+true_gamma <- c("(Intercept)"=7,
+                "ind_post"=0.4,
+                "ind_tx"=0.6,
+                "ind_female"=0.2,
+                "HISPANX"=-0.1,
+                "PCS42"=0.15,
+                "ind_post:ind_tx"=0)
+
+# --- safe gamma fit wrapper ---
+safe_gamma <- function(dat) {
+  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  if (nrow(dat2) < 10) return(rep(NA, 7))
+  out <- tryCatch({
+    coef(glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+             data = dat2, family = Gamma(link="log")))
+  }, error = function(e) rep(NA, 7))
+  out
+}
+
+# --- one replicate returning all coefficients ---
+run_one_all <- function(n = 1000, magnitude_level = 1,
+                        prop_extreme = 0.01, gamma_shape = 5) {
+  dat <- simulate_panel_data(n, magnitude_level,
+                             prop_extreme, gamma_shape = gamma_shape)
+
+  # Logistic
+  fit1 <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+              data = dat, family = binomial)
+  c1 <- coef(fit1)
+
+  # Gamma
+  c2 <- safe_gamma(dat)
+
+  list(logit = c1, gamma = c2)
+}
+
+# --- Monte Carlo ---
+set.seed(2025)
+B <- 200
+results <- replicate(B, run_one_all(), simplify = FALSE)
+
+# --- collect results into matrices ---
+logit_mat <- do.call(rbind, lapply(results, function(x) x$logit))
+gamma_mat <- do.call(rbind, lapply(results, function(x) x$gamma))
+
+# --- summarise bias for each coefficient ---
+summarise_bias <- function(mat, true_vals) {
+  est_means <- colMeans(mat, na.rm = TRUE)
+  est_var   <- apply(mat, 2, var, na.rm = TRUE)
+  bias <- est_means - true_vals[names(est_means)]
+  rmse <- sqrt(bias^2 + est_var)
+  tibble(term = names(est_means),
+         mean_est = est_means,
+         true_val = true_vals[names(est_means)],
+         bias = bias,
+         var_emp = est_var,
+         rmse = rmse)
+}
+
+logit_bias <- summarise_bias(logit_mat, true_logit)
+gamma_bias <- summarise_bias(gamma_mat, true_gamma)
+
+print(logit_bias)
+print(gamma_bias)
+```
+
