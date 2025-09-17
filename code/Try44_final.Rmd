@@ -22,7 +22,10 @@ library(ggplot2)
 
 
 ```{r}
-# log-uniform draw for extremes
+# log-uniform random draw for extremes
+# -- draws n rand vals from log uniform dist between min, max_val.
+# -- will simulate extreme values that span orders of magnitude (50k-3m)
+# -- `runif()` draws from uniform dist on the log scale; `exp()` transforms it back
 rlogunif <- function(n, min_val, max_val) {
   if (n <= 0) return(numeric(0))
   exp(runif(n, log(min_val), log(max_val)))
@@ -40,11 +43,17 @@ extreme_range <- function(mag_level) {
 
 # main simulator: two-part Gamma with extremes
 simulate_panel_data <- function(
-  n, magnitude_level, prop_extreme = 0.01, p_treated = 0.5,
-  sigma_u = 0.5, rho = 0.8, extreme_alloc = c("proportional","equal"),
+  n, 
+  magnitude_level, 
+  prop_extreme = 0.01, 
+  p_treated = 0.5,
+  sigma_u = 0.5, 
+  rho = 0.8, 
+  extreme_alloc = c("proportional","equal"),
   gamma_shape = 5
-) {
+  ) {
   extreme_alloc <- match.arg(extreme_alloc)
+  # two timepoints per person
   T <- 2; N <- n * T
   ids <- rep(1:n, each = T)
   ind_post <- rep(0:1, times = n)
@@ -61,12 +70,16 @@ simulate_panel_data <- function(
   INSCOV     <- factor(rep(INSCOV_i, each = T))
 
   # time-varying PCS42 with correlation
+  # -- Sims corr'd PCS42 scores across 2 timepoints using multivariate normal dist
+  # -- rho controls corr between timepoints
+  # -- zPCS is standardized version used in modeling
   Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
   pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
   PCS42 <- as.vector(t(pcs))
   zPCS  <- (PCS42 - 50) / 10
 
   # random intercept
+  # -- Adds person-level random intercepts to simulate unobserved heterogeneity
   u_i <- rnorm(n, 0, sigma_u)
   u   <- u_i[ids]
 
@@ -87,7 +100,9 @@ simulate_panel_data <- function(
   TOTEXPYY[ind_gt0 == 1] <- rgamma(sum(ind_gt0), shape = shape,
                                    scale = scale[ind_gt0 == 1])
 
-  # extremes
+  # Injecting extremes
+  # -- randomly selects K_ext obs to receive extreme values
+  # -- allocation can be 'equal' or 'proportional' across 4 treatment/post combos.
   K_ext <- rbinom(1, N, prop_extreme)
   if (K_ext > 0) {
     weights_cell <- if (extreme_alloc == "equal") rep(1, 4) else
@@ -98,6 +113,9 @@ simulate_panel_data <- function(
     TOTEXPYY[idx_ext] <- rlogunif(K_ext, rng[1], rng[2])
   } else idx_ext <- integer(0)
 
+  # FINAL OUTPUT
+  # -- returns a tidy tibble with all the simulated variables
+  # -- Includes a flag for which rows received extreme values
   tibble(
     DUPERSID = factor(ids),
     ind_post, ind_tx, ind_female, HISPANX, PCS42, INSCOV,
@@ -113,30 +131,42 @@ simulate_panel_data <- function(
 
 
 ```{r}
+# `fit_three_models` fits 3 different regression models to simulated panel data; returns tidy summary of coefficients. 
+
 fit_three_models <- function(
   n = 1000, magnitude_level = 1, prop_extreme = 0.05, gamma_shape = 5
-) {
-  dat <- simulate_panel_data(n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
+  ) {
+  # calls fn `simulate...` to generate synthetic panel data w/covars, spending, extreme vals
+  dat <- simulate_panel_data(
+    n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
 
   # Logistic
-  fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-                   data = dat, family = binomial)
+  fit_logit <- glm(
+    ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42, 
+    data = dat, 
+    family = binomial)
+  
   tidy_logit <- tidy(fit_logit) %>%
     select(term, estimate, std.error, p.value) %>%
     mutate(model = "Logistic (any >0)")
 
   # Gamma GLM
-  fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-                   data = dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0),
-                   family = Gamma(link = "log"),
-                   control = glm.control(maxit = 100, epsilon = 1e-8))
+  fit_gamma <- glm(
+    TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+    data = dat %>% 
+      filter(
+        ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0),
+    family = Gamma(link = "log"),
+    control = glm.control(maxit = 100, epsilon = 1e-8))
+  
   tidy_gamma <- tidy(fit_gamma) %>%
     select(term, estimate, std.error, p.value) %>%
     mutate(model = "Gamma GLM (positive)")
 
   # Log-OLS
-  fit_logols <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-                   data = dat)
+  fit_logols <- lm(
+    log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42, data = dat)
+  
   tidy_logols <- tidy(fit_logols) %>%
     select(term, estimate, std.error, p.value) %>%
     mutate(model = "Log-OLS (all spending)")
@@ -151,29 +181,48 @@ fit_three_models(n = 1000, prop_extreme = 0.05, gamma_shape = 5)
 ```
 
 
-#Monte Carlo
+#Monte Carlo  
+
+Next section is a Monte Carlo simulation designed to evaluate the performance of three different models (LR, Gamma GLM, log-OLS) in estimating the interaction effect of `ind_post:ind_tx`.   
 
 ```{r}
 # Safe Gamma wrapper
 safe_gamma <- function(dat) {
-  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  # subset to positive values only
+  dat2 <- dat %>% 
+    filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  # if fewer than 10 observations, return NA
   if (nrow(dat2) < 10) return(c(NA, NA))
+  
+  # extracts the coefficient & SE for interaction term
   out <- tryCatch({
     fit <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
                data = dat2, family = Gamma(link = "log"),
                control = glm.control(maxit = 100, epsilon = 1e-8))
+    
     coef(summary(fit))["ind_post:ind_tx", c("Estimate","Std. Error")]
   }, error = function(e) c(NA, NA))
   out
 }
 
 # One replicate
-run_one <- function(n = 1000, magnitude_level = 1, prop_extreme = 0.01, gamma_shape = 5) {
-  dat <- simulate_panel_data(n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
+# -- Fits all 3 models onto same data
+# -- Extracts estimate & SE for interaction term from each model
+run_one <- function(
+    n = 1000, 
+    magnitude_level = 1, 
+    prop_extreme = 0.01, 
+    gamma_shape = 5
+    ) {
+  dat <- simulate_panel_data(
+    n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
 
   # Logistic
-  fit1 <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-              data = dat, family = binomial)
+  fit1 <- glm(
+    ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+    data = dat, 
+    family = binomial)
+  
   c1 <- coef(summary(fit1))["ind_post:ind_tx", c("Estimate","Std. Error")]
 
   # Gamma
@@ -189,9 +238,11 @@ run_one <- function(n = 1000, magnitude_level = 1, prop_extreme = 0.01, gamma_sh
 
 # Monte Carlo loop
 set.seed(2025)
+# run `run_one` 500 times, store each result in `results`  
 B <- 500
 results <- replicate(B, run_one(), simplify = FALSE)
 
+# Get estimate and SE for each model (returns in a tidy tibble)
 extract <- function(model) {
   est <- sapply(results, function(x) x[[model]][1])
   se  <- sapply(results, function(x) x[[model]][2])
@@ -204,8 +255,35 @@ df <- bind_rows(
   extract("logols")
 )
 
+# Performance Metric: Assume the true value of interaction is 0 (no effect)
+# We didn't have interaction in simulation above, so that is the true value. 
 theta_true <- 0
 
+# Full diagnostic on each model's performance over 500 simulations: 
+# Handling skew/extremes (accuracy under messy data): 
+# -- Bias (distance from avg estimate to true value)
+# -- RMSE: Combines bias and variance
+# Reliable inference (Precision, CI validity)
+# -- Variance (how much estimates fluctuate)
+# -- Coverage: Proportion of simulations where 95CI contains true value
+# Model robustness (Stability, convergence)
+# -- Failure Rate: How often model couldn't produce a valid estimate
+
+# Compares model robustness under realistic conditions, telling you: 
+
+# 1. How well each model handles skewed data, extreme values: RMSE, Bias 
+# If model handles them well, will have low values for both, even with messy data. If either is high, then it's being thrown off by the skew or outliers. If gamma GLM has lower RMSE than log-OLS, it's handling the skew better.
+
+# 2. Which model is more reliable re: inference for interaction effect: Coverage (prop. of simulations where 95CI contains true value), var_emp (Empirical variance of the estimate). 
+# -- High coverage means model's uncertainty estimates are trustworthy.  
+# -- Low var_emp means model isn't bouncing around wildly across replicates. 
+# -- Coverage ~0.95 with low var_emp means model is giving precise and accurate inference.
+# -- If coverage too low, model is underestimating uncertainty (red flag for inference)
+
+# 3. Whether certain models fail more (i.e. Gamma GLM under sparse data): n_fail, fail_pct
+# -- Some models (like gamma GLM) more sensitive to sparse, extreme data.
+# -- If fail_pct high, means that model is struggling with data conditions
+# -- helps you decide whether a model is robust enough for real-world use
 summ <- df %>%
   group_by(model) %>%
   summarise(
@@ -248,6 +326,8 @@ ggplot(dat, aes(x = TOTEXPYY)) +
 
 ```{r}
 # --- scenario grid values ---
+# two dimensions of the simulation grid: prop extreme & gamma shape. 
+# This tests 9 combinations (3x3) of these values. 
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 gamma_shape_vals  <- c(2, 5, 10)
 
@@ -304,7 +384,31 @@ summ_grid <- all_df %>%
 
 print(summ_grid)
 
+```  
+
+```{r vis_summ}
+pacman::p_load(ggplot2)
+
+plot_metric <- function(metric_name, title) {
+  ggplot(summ_grid, aes(x = factor(prop_extreme), y = factor(gamma_shape), fill = .data[[metric_name]])) +
+    geom_tile(color = "white") +
+    facet_wrap(~ model) +
+    scale_fill_viridis_c(option = "C", name = metric_name) +
+    labs(
+      x = "Proportion of Extreme Values",
+      y = "Gamma Shape Parameter",
+      title = title
+    ) +
+    theme_minimal(base_size = 14)
+}
+
+plot_metric("bias", "Bias Across Models and Scenarios")
+plot_metric("rmse", "RMSE Across Models and Scenarios")
+plot_metric("coverage", "Coverage Probability Across Models and Scenarios")
+
+
 ```
+
 
 ```{r}
 
