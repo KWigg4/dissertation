@@ -303,6 +303,7 @@ summ
 
 ```{r}
 set.seed(2025)
+
 dat <- simulate_panel_data(n = 1000, magnitude_level = 1,
                            prop_extreme = 0.05, gamma_shape = 5)
 
@@ -405,14 +406,13 @@ plot_metric <- function(metric_name, title) {
 plot_metric("bias", "Bias Across Models and Scenarios")
 plot_metric("rmse", "RMSE Across Models and Scenarios")
 plot_metric("coverage", "Coverage Probability Across Models and Scenarios")
-
-
 ```
 
 
-```{r}
+```{r eval_coeffs}
+# Evaluate bias, RMSE for every coefficient in the LR, Gamma models. 
 
-# --- true parameter values ---
+# --- true parameter values (benchmarks to calc bias, RMSE) ---
 true_logit <- c("(Intercept)"=NA,  # intercept not set in DGP
                 "ind_post"=0.5,
                 "ind_tx"=0.7,
@@ -485,5 +485,19 @@ gamma_bias <- summarise_bias(gamma_mat, true_gamma)
 
 print(logit_bias)
 print(gamma_bias)
+```  
+
+```{r viz_coeff}
+
+bind_rows(
+  logit_bias |> mutate(model = "Logistic"),
+  gamma_bias |> mutate(model = "Gamma")
+) |> 
+  ggplot(aes(x = term, y = bias, fill = model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Bias by Coefficient", y = "Bias", x = "Term") +
+  theme_minimal()
+
 ```
+
 
