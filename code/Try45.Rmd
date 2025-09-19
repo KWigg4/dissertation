@@ -259,7 +259,15 @@ write_csv(summ_grid, "MC_results_108scenarios.csv")
 ```{r}
 library(ggplot2)
 
-ggplot(summ_grid, aes(x = prop_extreme, y = bias, color = model)) +
+custom_light_colors <- c(
+  "logit"  = "#a6dba0",  # light green
+  "gamma"  = "#fdb863",  # light orange
+  "logols" = "#b2abd2"   # light purple
+)
+
+ggplot(
+  summ_grid[summ_grid$model %in% c("logit", "gamma"), ] ,
+  aes(x = prop_extreme, y = bias, color = model)) +
   geom_line(size = 1) +
   facet_grid(magnitude_level ~ treatment) +
   labs(
@@ -270,13 +278,30 @@ ggplot(summ_grid, aes(x = prop_extreme, y = bias, color = model)) +
   theme_minimal() +
   theme(legend.position = "top")
 
+```  
+
+```{r}
+ggplot(summ_grid, aes(x = factor(prop_extreme), y = bias, fill = model)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  scale_fill_manual(values = custom_light_colors) +
+  facet_grid(magnitude_level ~ treatment) +
+  labs(
+    title = "Bias vs. Proportion of Extreme Values",
+    x = "Proportion of Extreme Values",
+    y = "Bias"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
 ```
+
 
 
 ```{r}
 
 ggplot(summ_grid, aes(x = factor(magnitude_level), y = rmse, fill = model)) +
   geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = custom_light_colors) +
   facet_grid(n ~ treatment) +
   labs(
     title = "RMSE by Magnitude Level",
@@ -286,11 +311,13 @@ ggplot(summ_grid, aes(x = factor(magnitude_level), y = rmse, fill = model)) +
   theme_minimal() +
   theme(legend.position = "top")
 
+
 ```  
 
 ```{r}
 ggplot(summ_grid, aes(x = treatment, y = coverage, fill = model)) +
-  geom_bar(stat = "identity", position = "dodge") +
+  stat_summary(fun = mean, geom = "bar", position = "dodge") +
+  scale_fill_manual(values = custom_light_colors) +
   facet_grid(n ~ magnitude_level) +
   labs(
     title = "Coverage Rate by Treatment Method",
@@ -299,6 +326,7 @@ ggplot(summ_grid, aes(x = treatment, y = coverage, fill = model)) +
   ) +
   theme_minimal() +
   theme(legend.position = "top")
+
 ```  
 
 
