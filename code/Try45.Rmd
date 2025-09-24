@@ -230,7 +230,7 @@ grid <- expand.grid(
 )
 
 set.seed(2025)
-B <- 200   # adjust to 500 for full run
+B <- 500   # adjusted to 500 for full run
 all_df <- pmap_dfr(grid, ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 5, ..4))
 
 # --- Summarise results with rounding ---
