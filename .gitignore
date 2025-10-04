@@ -13,4 +13,8 @@ research_design*
 *.docx
 data_raw_ipums/*
 *.png
+_archive/
+.docx
+dissertation_kwiggins*
+dissertation_kwiggins_20250529.docx
 
