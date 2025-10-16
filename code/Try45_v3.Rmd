@@ -1,0 +1,428 @@
+---
+title: "Untitled"
+author: "KW"
+date: "10-04-2025"
+output: pdf_document
+---
+
+Version 10-10-2025:   
+
+ - Couldn't get stochastic component to converge on gamma empirical data analysis so removing from this  
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+  
+pacman::p_load(
+  MASS,
+  dplyr,
+  tibble,
+  purrr,
+  readr,
+  ggplot2
+)
+
+dt <- lubridate::today()
+```  
+
+
+```{r}
+# ======================================================
+# Monte Carlo for Two-Part Model with Extreme Treatments
+# ======================================================
+
+# --- helper: log-uniform draw for extremes ---
+rlogunif <- function(n, min_val, max_val) {
+  if (n <= 0) return(numeric(0))
+  exp(runif(n, log(min_val), log(max_val)))
+}
+
+# --- helper: extreme value ranges ---
+extreme_range <- function(mag_level) {
+  switch(as.character(mag_level),
+         "1" = c(5e4, 1e6),
+         "2" = c(5e4, 2e6),
+         "3" = c(5e4, 3e6),
+         stop("Invalid magnitude_level"))
+}
+
+# --- simulator: two-part Gamma with extremes ---
+simulate_panel_data <- function(
+  n, magnitude_level, prop_extreme = 0.01,
+  p_treated = 0.5, sigma_u = 0.5, rho = 0.5,
+  gamma_shape = 2 # changed from 5
+) {
+  T <- 2; N <- n * T
+  ids <- rep(1:n, each = T)
+  ind_post <- rep(0:1, times = n)
+
+  # covariates
+  ind_tx_i     <- rbinom(n, 1, p_treated)
+  ind_female_i <- rbinom(n, 1, 0.5)
+  HISPANX_i    <- rbinom(n, 1, 0.2)
+  INSCOV_i     <- sample(1:3, n, replace = TRUE)
+
+  ind_tx     <- rep(ind_tx_i, each = T)
+  ind_female <- rep(ind_female_i, each = T)
+  HISPANX    <- rep(HISPANX_i, each = T)
+  INSCOV     <- factor(rep(INSCOV_i, each = T))
+
+  # PCS42 with correlation
+  Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
+  pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
+  PCS42 <- as.vector(t(pcs))
+  zPCS  <- (PCS42 - 50) / 10
+
+  # random intercept
+  u_i <- rnorm(n, 0, sigma_u)
+  u   <- u_i[ids]
+
+  # Part 1: logistic >0
+  # lp_cov <- 0.2*ind_post - 0.2*ind_tx + 1.2*ind_female -
+  #   0.8*HISPANX - 0.2*zPCS + u
+  
+  lp_cov <- 0.2*ind_post - 0.2*ind_tx + 1.2*ind_female -
+    0.8*HISPANX - 0.2*zPCS
+  
+  pr_pos <- plogis(lp_cov)
+  ind_gt0 <- rbinom(N, 1, pr_pos)
+
+  # Part 2: Gamma for positives
+  # lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx - 0.4*zPCS +
+  #   0.4*ind_female - 0.2*HISPANX + u
+  lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx - 0.4*zPCS +
+    0.4*ind_female - 0.2*HISPANX
+  mu <- exp(lp_cont)
+  shape <- gamma_shape
+  scale <- mu / shape
+
+  TOTEXPYY <- rep(0, N)
+  TOTEXPYY[ind_gt0 == 1] <- rgamma(sum(ind_gt0),
+                                   shape = shape,
+                                   scale = scale[ind_gt0 == 1])
+
+  # inject extremes
+  K_ext <- rbinom(1, N, prop_extreme)
+  if (K_ext > 0) {
+    rng <- extreme_range(magnitude_level)
+    idx_ext <- sample.int(N, size = K_ext, replace = FALSE)
+    TOTEXPYY[idx_ext] <- rlogunif(K_ext, rng[1], rng[2])
+  } else idx_ext <- integer(0)
+
+  tibble(
+    DUPERSID = factor(ids),
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, INSCOV,
+    ind_gt0 = ind_gt0,
+    TOTEXPYY = TOTEXPYY,
+    extreme_flag = as.integer(seq_len(N) %in% idx_ext),
+    magnitude_level, prop_extreme
+  )
+}
+
+# --- treatments for extreme values ---
+treat_extremes <- function(x, method = "raw") {
+  if (method == "raw") return(x)
+  q99 <- quantile(x, 0.99, na.rm = TRUE)
+  if (method == "topcode") {
+    return(pmin(x, q99))
+  }
+  if (method == "mean_adj") {
+    m <- mean(x[x <= q99], na.rm = TRUE)
+    x[x > q99] <- m
+    return(x)
+  }
+  if (method == "median_adj") {
+    m <- median(x[x <= q99], na.rm = TRUE)
+    x[x > q99] <- m
+    return(x)
+  }
+  stop("Unknown treatment method")
+}
+
+# --- safe Gamma fit wrapper ---
+safe_gamma <- function(dat) {
+  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  if (nrow(dat2) < 10) return(c(NA, NA))
+  out <- tryCatch({
+    fit <- glm(
+      TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+      data = dat2,
+      family = Gamma(link = "log"),
+      control = glm.control(maxit = 100, epsilon = 1e-8)
+    )
+    coef(summary(fit))["ind_post:ind_tx", c("Estimate","Std. Error")]
+  }, error = function(e) c(NA, NA))
+  out
+}
+
+# --- one replication under one scenario ---
+## Original  
+run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment) {
+  dat <- simulate_panel_data(n, magnitude_level, prop_extreme, gamma_shape = gamma_shape)
+  dat <- dat %>% mutate(TOTEXPYY = treat_extremes(TOTEXPYY, treatment))
+
+  # Logistic
+  fit1 <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+              data = dat, family = binomial)
+  c1 <- coef(summary(fit1))["ind_post:ind_tx", c("Estimate","Std. Error")]
+
+  # Gamma
+  c2 <- safe_gamma(dat)
+
+  # Log-OLS
+  fit3 <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+             data = dat)
+  c3 <- coef(summary(fit3))["ind_post:ind_tx", c("Estimate","Std. Error")]
+
+  tibble(model = c("logit","gamma","logols"),
+         est   = c(c1[1], c2[1], c3[1]),
+         se    = c(c1[2], c2[2], c3[2]),
+         n = n, prop_extreme, magnitude_level, gamma_shape, treatment)
+}
+
+
+# --- Monte Carlo for one scenario ---
+run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment) {
+  results <- replicate(B, run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment), simplify = FALSE)
+  bind_rows(results)
+}
+
+# ======================================================
+# Step 1: Representative dataset (histograms + model fits)
+# ======================================================
+
+set.seed(123)
+dat_example <- simulate_panel_data(
+  n = 1000,
+  magnitude_level = 1,
+  prop_extreme = 0.05,
+  gamma_shape = 5
+)
+
+# --- Histograms of TOTEXPYY ---
+p1 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "skyblue", color = "black") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY", x = "Spending", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "seagreen", color = "black") +
+  scale_x_log10(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY (log scale)", x = "Spending (log)", y = "Count") +
+  theme_minimal()
+
+print(p1)
+print(p2)
+
+# --- Fit the 3 models on this dataset ---
+fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                 data = dat_example, family = binomial)
+fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                 data = dat_example %>% filter(ind_gt0 == 1),
+                 family = Gamma(link = "log"))
+fit_logols <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
+                 data = dat_example)
+
+summary(fit_logit)
+summary(fit_gamma)
+summary(fit_logols)
+
+# ======================================================
+# Step 2: Full Monte Carlo across 108 scenarios
+# ======================================================
+
+n_vals <- c(500, 1000, 2000)
+prop_extreme_vals <- c(0.01, 0.05, 0.10)
+magnitude_vals <- c(1, 2, 3)
+treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj")
+
+grid <- expand.grid(
+  n = n_vals,
+  prop_extreme = prop_extreme_vals,
+  magnitude_level = magnitude_vals,
+  treatment = treatment_methods,
+  stringsAsFactors = FALSE
+)
+
+set.seed(2025)
+B <- 1000   # adjusted to 500 for full run
+all_df <- pmap_dfr(grid, ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 5, ..4))
+
+# --- Summarise results with rounding ---
+theta_true <- 0
+
+summ_grid <- all_df %>%
+  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+  summarise(
+    mean_est = round(mean(est, na.rm = TRUE), 4),
+    bias     = round(mean(est - theta_true, na.rm = TRUE), 4),
+    emp_se   = round(sd(est, na.rm = TRUE), 4),
+    rmse     = round(sqrt(mean((est - theta_true)^2, na.rm = TRUE)), 4),
+    coverage = round(mean((est - 1.96*se <= theta_true) &
+                          (theta_true <= est + 1.96*se), na.rm = TRUE), 4),
+    n_fail   = sum(is.na(est)),
+    .groups = "drop"
+  )
+
+print(summ_grid)
+
+saveRDS(summ_grid, here::here(paste0("data_processed/summ_grid",dt,".RDS")))
+
+# --- Export to CSV ---
+write.csv(summ_grid, here::here(paste0("data_processed/summ_grid_",dt,".csv")))
+
+## Pilot study
+pilot <- summ_grid |> 
+  dplyr::filter(model=="gamma",n==1000, prop_extreme==0.01, magnitude_level ==1)
+
+write.csv(
+  pilot, 
+  here::here(paste0("data_processed/pilot_",dt,".csv"))
+)
+
+saveRDS(pilot, here::here("data_processed/pilot.RDS"))
+
+```  
+
+```{r}
+#Factorial ANOVA  
+pilot_bias <- all_df |> 
+	dplyr::filter(model=="gamma",n==1000, prop_extreme==0.01, magnitude_level ==1)
+
+pilot_bias_data <- pilot_bias %>%
+  select(treatment, bias = est)
+
+bias_anova_pilot <- aov(bias ~ treatment, data = pilot_bias_data)
+summary(bias_anova_pilot)
+
+library(effectsize)
+eta_squared(bias_anova_pilot)
+# effect size is VERY small... try larger sample size?
+
+TukeyHSD(bias_pilot)
+
+write.csv(
+	pilot_bias_data,
+	here::here(paste0("data_results/pilot_allDF",dt,".csv"))
+	)
+saveRDS(
+	pilot_bias_data, 
+	here::here(paste0("data_results/pilot_allDF",dt,".RDS"))
+	)
+
+library(ggplot2)
+
+ggplot(pilot_bias_data, aes(x = treatment, y = bias)) +
+  geom_boxplot(fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Bias Estimates by Treatment Method", y = "Bias")
+
+
+
+# bias_anova <- aov(
+# 	est ~ model * treatment * magnitude_level * prop_extreme * n, data = all_df)
+# summary(bias_anova)
+# 
+# anova_gamma <- aov(est ~ treatment * magnitude_level * prop_extreme * n, data = filter(all_df, model == "gamma"))
+# summary(anova_gamma)
+
+```
+
+
+```{r pilot10k}
+#Factorial ANOVA  
+pilot_bias2 <- all_df |> 
+	dplyr::filter(model=="gamma",n==5000, prop_extreme==0.1, magnitude_level ==3)
+
+pilot_bias2_data <- pilot_bias2 %>%
+  select(treatment, bias = est)
+
+bias2_anova <- aov(bias ~ treatment, data = pilot_bias2_data)
+summary(bias2_anova)
+
+eta_squared(bias2_anova)
+eta_squared(bias2_anova, partial = TRUE)
+omega_squared(bias_anova)
+
+```
+
+
+
+```{r}
+library(ggplot2)
+
+custom_light_colors <- c(
+  "logit"  = "#a6dba0",  # light green
+  "gamma"  = "#fdb863",  # light orange
+  "logols" = "#b2abd2"   # light purple
+)
+
+ggplot(
+  summ_grid[summ_grid$model %in% c("logit", "gamma"), ] ,
+  aes(x = prop_extreme, y = bias, color = model)) +
+  geom_line(size = 1) +
+  facet_grid(magnitude_level ~ treatment) +
+  labs(
+    title = "Bias vs. Proportion of Extreme Values",
+    x = "Proportion of Extreme Values",
+    y = "Bias in Estimate"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```  
+
+```{r}
+ggplot(summ_grid, aes(x = factor(prop_extreme), y = bias, fill = model)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  scale_fill_manual(values = custom_light_colors) +
+  facet_grid(magnitude_level ~ treatment) +
+  labs(
+    title = "Bias vs. Proportion of Extreme Values",
+    x = "Proportion of Extreme Values",
+    y = "Bias"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+
+
+```{r}
+
+ggplot(summ_grid, aes(x = factor(magnitude_level), y = rmse, fill = model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = custom_light_colors) +
+  facet_grid(n ~ treatment) +
+  labs(
+    title = "RMSE by Magnitude Level",
+    x = "Magnitude Level of Extremes",
+    y = "Root Mean Squared Error (RMSE)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+
+```  
+
+```{r}
+ggplot(summ_grid, aes(x = treatment, y = coverage, fill = model)) +
+  stat_summary(fun = mean, geom = "bar", position = "dodge") +
+  scale_fill_manual(values = custom_light_colors) +
+  facet_grid(n ~ magnitude_level) +
+  labs(
+    title = "Coverage Rate by Treatment Method",
+    x = "Extreme Value Treatment",
+    y = "Coverage Probability (95% CI)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```  
+
+
+
+
+
