@@ -8,6 +8,15 @@ output: pdf_document
 Version 10-10-2025:   
 
  - Couldn't get stochastic component to converge on gamma empirical data analysis so removing from this  
+ 
+Version 10-16-2025:  
+
+ - Shape of distribution in empirical data analysis was 0.2, which seems super unstable: trying 1 (in try45_v2 was 5 but that's far from my data)   
+ - Trying to model with less extreme skew for magnitude 1 set max to 500,000 then 2 at 1m then 3 at 2m   
+ 
+Version 10-19-2025:   
+
+ - Have to change gamma shape in two places: in function call and at end when it creates all_df (map)  
 
 
 ```{r setup, include=FALSE}
@@ -40,7 +49,8 @@ rlogunif <- function(n, min_val, max_val) {
 # --- helper: extreme value ranges ---
 extreme_range <- function(mag_level) {
   switch(as.character(mag_level),
-         "1" = c(5e4, 1e6),
+        # "1" = c(5e4, 1e6),
+  			 "1" = c(5e4, 1e6),
          "2" = c(5e4, 2e6),
          "3" = c(5e4, 3e6),
          stop("Invalid magnitude_level"))
@@ -90,8 +100,8 @@ simulate_panel_data <- function(
   # Part 2: Gamma for positives
   # lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx - 0.4*zPCS +
   #   0.4*ind_female - 0.2*HISPANX + u
-  lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx - 0.4*zPCS +
-    0.4*ind_female - 0.2*HISPANX
+  lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx +
+    0.4*ind_female - 0.2*HISPANX - 0.4*zPCS
   mu <- exp(lp_cont)
   shape <- gamma_shape
   scale <- mu / shape
@@ -120,20 +130,21 @@ simulate_panel_data <- function(
 }
 
 # --- treatments for extreme values ---
+# -- updated to .95 on 10/16  
 treat_extremes <- function(x, method = "raw") {
   if (method == "raw") return(x)
-  q99 <- quantile(x, 0.99, na.rm = TRUE)
+  q95 <- quantile(x, 0.95, na.rm = TRUE)
   if (method == "topcode") {
-    return(pmin(x, q99))
+    return(pmin(x, q95))
   }
   if (method == "mean_adj") {
-    m <- mean(x[x <= q99], na.rm = TRUE)
-    x[x > q99] <- m
+    m <- mean(x[x <= q95], na.rm = TRUE)
+    x[x > q95] <- m
     return(x)
   }
   if (method == "median_adj") {
-    m <- median(x[x <= q99], na.rm = TRUE)
-    x[x > q99] <- m
+    m <- median(x[x <= q95], na.rm = TRUE)
+    x[x > q95] <- m
     return(x)
   }
   stop("Unknown treatment method")
@@ -196,7 +207,7 @@ dat_example <- simulate_panel_data(
   n = 1000,
   magnitude_level = 1,
   prop_extreme = 0.05,
-  gamma_shape = 5
+  gamma_shape = 2
 )
 
 # --- Histograms of TOTEXPYY ---
@@ -232,7 +243,7 @@ summary(fit_logols)
 # Step 2: Full Monte Carlo across 108 scenarios
 # ======================================================
 
-n_vals <- c(500, 1000, 2000)
+n_vals <- c(250, 500, 1000)
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 magnitude_vals <- c(1, 2, 3)
 treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj")
@@ -247,7 +258,7 @@ grid <- expand.grid(
 
 set.seed(2025)
 B <- 1000   # adjusted to 500 for full run
-all_df <- pmap_dfr(grid, ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 5, ..4))
+all_df <- pmap_dfr(grid, ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 2, ..4))
 
 # --- Summarise results with rounding ---
 theta_true <- 0
@@ -267,48 +278,72 @@ summ_grid <- all_df %>%
 
 print(summ_grid)
 
+# Save objects  
+
+saveRDS(all_df, here::here(paste0("data_processed/all_df",dt,".RDS")))
+
+all_df_gamma <- all_df |> 
+	filter(model=="gamma") 
+# should have 108k records
+
 saveRDS(summ_grid, here::here(paste0("data_processed/summ_grid",dt,".RDS")))
 
 # --- Export to CSV ---
 write.csv(summ_grid, here::here(paste0("data_processed/summ_grid_",dt,".csv")))
 
-## Pilot study
-pilot <- summ_grid |> 
-  dplyr::filter(model=="gamma",n==1000, prop_extreme==0.01, magnitude_level ==1)
-
-write.csv(
-  pilot, 
-  here::here(paste0("data_processed/pilot_",dt,".csv"))
-)
-
-saveRDS(pilot, here::here("data_processed/pilot.RDS"))
-
 ```  
 
 ```{r}
 #Factorial ANOVA  
+
+# VERSION: 
+# -- 10/16/2025 pilot: changed magnitudes, n's above
+
 pilot_bias <- all_df |> 
-	dplyr::filter(model=="gamma",n==1000, prop_extreme==0.01, magnitude_level ==1)
+	dplyr::filter(model=="gamma",n==500, prop_extreme==0.01, magnitude_level ==1)
+
 
 pilot_bias_data <- pilot_bias %>%
   select(treatment, bias = est)
 
+write.csv(
+  pilot_bias_data, 
+  here::here(paste0("data_processed/pilot_",dt,".csv"))
+)
+
+saveRDS(pilot_bias_data, here::here("data_processed/pilot.RDS"))
+
 bias_anova_pilot <- aov(bias ~ treatment, data = pilot_bias_data)
+
+# AI told me a full factorial had all these in there and it was *: 
+bias_anova <- aov(bias ~ prop_extreme * coding_scheme * sample_size * skewness, data = pilot_bias_data)
+summary(bias_anova)
+
 summary(bias_anova_pilot)
 
 library(effectsize)
 eta_squared(bias_anova_pilot)
 # effect size is VERY small... try larger sample size?
 
-TukeyHSD(bias_pilot)
+TukeyHSD(bias_anova_pilot)
+
+library(emmeans)
+
+# Get estimated marginal means
+em <- emmeans(bias_anova_pilot, ~ treatment)
+
+# Pairwise comparisons with Tukey adjustment
+pairs(em, adjust = "tukey")
+
 
 write.csv(
 	pilot_bias_data,
-	here::here(paste0("data_results/pilot_allDF",dt,".csv"))
+	here::here(paste0("results/pilot_allDF",dt,".csv"))
 	)
+
 saveRDS(
 	pilot_bias_data, 
-	here::here(paste0("data_results/pilot_allDF",dt,".RDS"))
+	here::here(paste0("results/pilot_allDF",dt,".RDS"))
 	)
 
 library(ggplot2)
@@ -318,14 +353,6 @@ ggplot(pilot_bias_data, aes(x = treatment, y = bias)) +
   theme_minimal() +
   labs(title = "Bias Estimates by Treatment Method", y = "Bias")
 
-
-
-# bias_anova <- aov(
-# 	est ~ model * treatment * magnitude_level * prop_extreme * n, data = all_df)
-# summary(bias_anova)
-# 
-# anova_gamma <- aov(est ~ treatment * magnitude_level * prop_extreme * n, data = filter(all_df, model == "gamma"))
-# summary(anova_gamma)
 
 ```
 

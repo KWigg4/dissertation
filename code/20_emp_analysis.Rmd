@@ -1,5 +1,5 @@
 ---
-title: "emp analysis"
+title: "Emp Analysis"
 author: "KW"
 date: "`r Sys.Date()`"
 output: html_document
@@ -13,15 +13,225 @@ pacman::p_load(
   tidyr,
   broom,
   gt,
-  MASS
+  MASS,
+  fitdistrplus,
+  gtsummary,
+  ggplot2
 )
 
-meps <- readRDS(here::here("data_processed/fyc_processed.RDS")) 
+meps <- readRDS(here::here("data_processed/fyc_processed.RDS")) |> 
+	select(-fct_tx) |> 
+	mutate(
+		fct_tx = if_else(AGELAST >= 27, 1, 0),
+		fct_tx = factor(
+			fct_tx, 
+			levels = c("0","1"),
+			labels = c("control (27-29)", "tx (23-25)"))
+	)
+
+```  
+
+## Table One  
+```{r}
+meps |> 
+	select(
+		TOTEXPYY,
+		pre_post,
+		fct_tx,
+		AGELAST,
+		ind_gt0,
+		PCS42,
+		zPCS42,
+		HISPANX,
+		ind_female
+		) |> 
+	tbl_summary(
+		by=fct_tx,
+		type = list(
+			AGELAST ~ "continuous",
+			ind_female ~ "categorical"),
+		statistic = list(all_continuous() ~ "{mean} ({sd})")
+		) |> 
+	add_p() |> 
+	add_overall()
+```
+
+
+
+## DV    
+
+How many zeros? (Mass at zero)  
+
+```{r}
+meps |> 
+  mutate(ind_gt0 = as.factor(ind_gt0)) |> 
+  select(ind_gt0) |> 
+  gtsummary::tbl_summary()
+```  
+How many > 9k?  
+```{r}
+meps |> 
+	mutate(
+		ind_gt9k = if_else(TOTEXPYY > 9000, 1, 0),
+		ind_gt9k = as.factor(ind_gt9k)) |> 
+	select(ind_gt9k) |> 
+	tbl_summary()
+```  
+
+Maximum value:  
+```{r}
+summary(meps$TOTEXPYY)
+sd(meps$TOTEXPYY)
+```
+
+
+
+
+How many do I have > $20k? > 50k?  
+
+```{r}
+n_gt50k <- meps |> filter(TOTEXPYY>50000) |> nrow() # 35
+
+n_gt20k <- meps |> filter(TOTEXPYY>20000) |> nrow() # 223
+
+meps_le50k <- meps |> filter(TOTEXPYY<=50000)
+
+meps_le20k <- meps |> filter(TOTEXPYY<=20000)
+```  
+
+### Plots  
+
+
+
+```{r plot_a}
+
+hist_full <- ggplot(
+	meps, aes(x=TOTEXPYY))+
+	geom_histogram(
+		aes(y = after_stat(count)/sum(after_stat(count))), 
+		fill="steelblue", bins=40)+
+	theme(
+		panel.background = element_blank(), 
+		panel.border = element_rect(color="black", fill=NA),
+		axis.ticks=element_line(color="black")
+	)+
+	scale_x_continuous(expand=c(0.02,0))+
+	scale_y_continuous(expand=c(0,0)) +
+	ylab("Fraction")+
+	xlab("Total health care expenditures (dollars)")
+```  
+
+
+```{r hist_le20k}
+meps_le20k_gt0 <- meps_le20k |> filter(TOTEXPYY > 0)
+
+hist_le20k <- ggplot(meps_le20k_gt0, aes(x=TOTEXPYY))+
+	geom_histogram(
+		aes(y = after_stat(count)/sum(after_stat(count))), 
+		fill="steelblue", bins=40)+
+	theme(
+		panel.background = element_blank(), 
+		panel.border = element_rect(color="black", fill=NA),
+		axis.ticks=element_line(color="black")
+	)+
+	scale_x_continuous(expand=c(0.02,0))+
+	scale_y_continuous(expand=c(0,0), limits=c(0, 0.3)) +
+	ylab("Fraction")+
+	xlab("Total health care expenditures (dollars)")+
+	annotate(
+		"text",
+		x=17500, y=0.05,
+		label = glue::glue(n_gt20k, " have\nexpenditures >$20k"))
+
+```  
+
+```{r bar_gt0}
+
+avg_1s_gt0 <- round(mean(meps$ind_gt0), digits=3)
+avg_0s_gt0 <- 1-avg_1s_gt0
+
+bar_gt0_prep <- data.frame(
+	Expenditure = factor(c(0, 1), levels = c(0, 1)),
+	Fraction = c(avg_0s_gt0, avg_1s_gt0),
+	Label = c(
+		paste0(avg_0s_gt0*100,"% have\nexpenditures = $0"), 
+		paste0(avg_1s_gt0*100,"% have\nexpenditures >$0"))
+)
+
+(bar_gt0 <- ggplot(
+	bar_gt0_prep, aes(x=Expenditure, y=Fraction))+
+	geom_bar(stat="identity", fill="steelblue", width = 0.6)+
+	geom_text(aes(label = Label), vjust = -0.5)+
+	theme(
+		panel.background = element_blank(), 
+		panel.border = element_rect(color="black", fill=NA),
+		axis.ticks=element_line(color="black"),
+	)+
+	scale_y_continuous(
+		expand=c(0,0), 
+		limits = c(0, 0.9))+
+	labs(
+		x = "Are health care expenditures positive (or 0)?",
+		y = "Fraction"
+	)+
+	# theme_minimal(base_size = 12)+
+	theme(
+		axis.title.x = element_text(),
+		axis.title.y = element_text())
+	)
 
 ```
 
 
-## Empirical Data Analysis  
+```{r hist_log}
+meps_log <- meps |> 
+  filter(TOTEXPYY > 0) |> 
+  mutate(log_totexpy = log(TOTEXPYY))
+
+(hist_log <- ggplot(
+	meps_log, aes(x=log_totexpy))+
+		geom_histogram(
+		aes(y = after_stat(count)/sum(after_stat(count))), 
+		fill="steelblue", bins=40)+
+	# geom_histogram(
+	# 	aes(y = ..density..), bins=30, fill="steelblue", alpha = 0.6)+
+	# geom_density(color = "darkgreen")+
+	# stat_function(
+	# 	fun = dnorm,
+	# 	args = list(mean = mean(meps_log$log_totexpy), sd=sd(meps_log$log_totexpy)),
+	# 	color = "darkgreen"
+	# )+
+	theme(
+		panel.background = element_blank(), 
+		panel.border = element_rect(color="black", fill=NA),
+		axis.ticks=element_line(color="black")
+	)+
+	scale_x_continuous(expand=c(0.02,0))+
+	scale_y_continuous(expand=c(0,0), limits = c(0, 0.09)) +
+	ylab("Fraction")+
+	xlab("ln(Total health care expenditures), if>0"))
+
+```    
+
+Combine plots  
+
+```{r combo_plots}
+library(cowplot)
+
+all_plots <- plot_grid(
+	plot_grid(hist_full, bar_gt0, ncol = 2, labels = c("a", "b")), 
+	NULL,
+	plot_grid(hist_le20k, hist_log, ncol = 2, labels = c("c", "d")), 
+	ncol = 1,
+	# labels = c("a", "b", "c", "d"),
+	rel_heights = c(1, 0.15, 1)
+	)
+
+all_plots
+
+```   
+Figure 1: The distribution of total health care expenditures is displayed four ways: a) full histogram incluing zeros, b) the split between zeros and nonzeros, c) the histogram of just positive values, and d) the histogram of the natural log of positive values.
+
 
 ### Distribution parameters  
  
@@ -36,28 +246,22 @@ pos_exp <- pos_exp[pos_exp>0 & !is.na(pos_exp)]
 shape_est <- (mean(pos_exp))^2 / var(pos_exp)
 scale_est <- var(pos_exp) / mean(pos_exp)
 
-# Basic histogram
-hist(pos_exp, breaks = 50, probability = TRUE,
-     main = "Histogram of TOTEXPYY",
-     xlab = "Expenditure", col = "lightblue", border = "white")
-
-# Add kernel density estimate
-lines(density(pos_exp), col = "darkblue", lwd=2)
-
 ```  
 
 Formulas used for shape and scale estimates, results: 
 
  - Shape $\alpha = \frac{\mu^2}{\sigma^2}$ = `r shape_est`  
  - Scale $\theta = \frac{\sigma^2}{\mu}$  = `r scale_est`  
+ 
+
 
 #### Fit and Compare Dns  
 
 ```{r}
-fit_gamma <- fitdist(pos_exp, "gamma", method = "mme")     # Method of moments
-fit_lnorm <- fitdist(pos_exp, "lnorm", method = "mle")     # Maximum likelihood
-fit_weibull <- fitdist(pos_exp, "weibull", method = "mle") # Maximum likelihood
-gofstat(list(fit_gamma, fit_lnorm, fit_weibull))
+fit_gamma <- fitdistrplus::fitdist(pos_exp, "gamma", method = "mme") # Method of moments
+fit_lnorm <- fitdistrplus::fitdist(pos_exp, "lnorm", method = "mle") # ML
+fit_weibull <- fitdistrplus::fitdist(pos_exp, "weibull", method = "mle") # ML
+fitdistrplus::gofstat(list(fit_gamma, fit_lnorm, fit_weibull))
 ```   
 
 ```{r}
@@ -109,7 +313,7 @@ zpcs_corr <- cor(zpcs_wide$zPCS42_0, zpcs_wide$zPCS42_1, use = "complete.obs")
 
 Results:  
 
- - N=`r n_corr_cases` complete cases (of `r nrow(z_pcs_wide)`)  
+ - N=`r n_corr_cases` complete cases (of `r nrow(zpcs_wide)`)  
  - Correlation coefficient = `r zpcs_corr`  
 
 ### Logit model  
