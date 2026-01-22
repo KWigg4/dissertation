@@ -31,6 +31,24 @@ meps <- readRDS(here::here("data_processed/fyc_processed.RDS")) |>
 
 ```  
 
+Percentiles:  
+(And which is closer to 50k?)  
+
+```{r}
+summary(meps$TOTEXPYY)
+p99 <- quantile(meps$TOTEXPYY, 0.99)
+p95 <- quantile(meps$TOTEXPYY, 0.95)
+
+#How many > 99th percentile? 
+n_gt99th <- meps |> filter(TOTEXPYY>p99) |> nrow() #167
+n_gt95th <- meps |> filter(TOTEXPYY>p95) |> nrow() #832
+```   
+
+ - There are `r n_gt99th` records > 99th percentile  
+ - There are `r n_gt95th` records > 95th percentile
+
+
+
 ## Table One  
 ```{r}
 meps |> 
@@ -328,7 +346,16 @@ emp_logit <- glm(
   family = binomial)
 
 summary(emp_logit)
-```  
+```   
+
+#### Checking for overdispersion  
+In LR, variance is inherently a function of the mean so errors are expected to be heteroscedastic by definition.  
+
+However, the variance non-constancy to worry about in LR is overdispersion (when variance in observed binary outcome data is greater than what the binomial distribution predicts). If present, causes SE to be underestimated and makes p-values too small.  
+
+Can check for overdispersion using:  
+ - chi-square test ratio: Ratio of the Residual Deviance to the Residual Degrees of freedom. Ratio should be close to 1.  
+ 
 
 ```{r logit_RI, eval=FALSE}
 library(lme4)
@@ -404,5 +431,8 @@ emp_gamma_mixed <- glmer(
     statistic = round(statistic, 2),
     exp_coef = round(exp_coef, 2)
   ))
-```
+```  
+
+## Homoskedasticity  
+
 

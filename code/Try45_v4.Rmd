@@ -237,18 +237,15 @@ fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
 fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
                  data = dat_example %>% filter(ind_gt0 == 1),
                  family = Gamma(link = "log"))
-fit_logols <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-                 data = dat_example)
 
 summary(fit_logit)
 summary(fit_gamma)
-summary(fit_logols)
 
 # ======================================================
 # Step 2: Full Monte Carlo across 108 scenarios
 # ======================================================
 
-n_vals <- c(250, 1000, 3000)
+n_vals <- c(5000, 10000, 20000)
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 magnitude_vals <- c(1, 2, 3)
 treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj")
@@ -482,7 +479,6 @@ ggplot(summ_grid, aes(x = factor(prop_extreme), y = bias, fill = model)) +
   theme(legend.position = "top")
 
 ```
-
 
 
 ```{r}
