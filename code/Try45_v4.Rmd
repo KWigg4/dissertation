@@ -56,9 +56,6 @@ extreme_range <- function(mag_level) {
   			 "1" = c(5e4, 1e6),
   			 "2" = c(5e4, 2e6),
          "3" = c(5e4, 3e6),
-  # 			 "1" = c(5e4, 5e5),
-  #        "2" = c(5e4, 1e6),
-  #        "3" = c(5e4, 2e6),
          stop("Invalid magnitude_level"))
 }
 
@@ -94,9 +91,6 @@ simulate_panel_data <- function(
   u   <- u_i[ids]
 
   # Part 1: logistic >0
-  # lp_cov <- 0.2*ind_post - 0.2*ind_tx + 1.2*ind_female -
-  #   0.8*HISPANX - 0.2*zPCS + u
-  
   lp_cov <- 0.2*ind_post - 0.2*ind_tx + 1.2*ind_female -
     0.8*HISPANX - 0.2*zPCS
   
@@ -104,8 +98,6 @@ simulate_panel_data <- function(
   ind_gt0 <- rbinom(N, 1, pr_pos)
 
   # Part 2: Gamma for positives
-  # lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx - 0.4*zPCS +
-  #   0.4*ind_female - 0.2*HISPANX + u
   lp_cont <- 7 + 0.2*ind_post + 0.2*ind_tx +
     0.4*ind_female - 0.2*HISPANX - 0.4*zPCS
   mu <- exp(lp_cont)
@@ -139,6 +131,7 @@ simulate_panel_data <- function(
 # -- updated to .95 on 10/16  
 treat_extremes <- function(x, method = "raw") {
   if (method == "raw") return(x)
+	
   q95 <- quantile(x, 0.95, na.rm = TRUE)
   if (method == "topcode") {
     return(pmin(x, q95))
@@ -186,14 +179,9 @@ run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment) {
   # Gamma
   c2 <- safe_gamma(dat)
 
-  # Log-OLS
-  fit3 <- lm(log1p(TOTEXPYY) ~ ind_post*ind_tx + ind_female + HISPANX + PCS42,
-             data = dat)
-  c3 <- coef(summary(fit3))["ind_post:ind_tx", c("Estimate","Std. Error")]
-
-  tibble(model = c("logit","gamma","logols"),
-         est   = c(c1[1], c2[1], c3[1]),
-         se    = c(c1[2], c2[2], c3[2]),
+  tibble(model = c("logit","gamma"),
+         est   = c(c1[1], c2[1]),
+         se    = c(c1[2], c2[2]),
          n = n, prop_extreme, magnitude_level, gamma_shape, treatment)
 }
 
@@ -242,7 +230,7 @@ summary(fit_logit)
 summary(fit_gamma)
 
 # ======================================================
-# Step 2: Full Monte Carlo across 108 scenarios
+# Step 2: Full Monte Carlo across X scenarios
 # ======================================================
 
 n_vals <- c(5000, 10000, 20000)
