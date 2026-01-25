@@ -5,22 +5,16 @@ date: "10-04-2025"
 output: pdf_document
 ---
 
-Version 10-10-2025:   
+Version Notes:   
 
- - Couldn't get stochastic component to converge on gamma empirical data analysis so removing from this  
- 
-Version 10-16-2025:  
-
+ - Couldn't get stochastic component to converge on gamma empirical data analysis so removing from this :(  
  - Shape of distribution in empirical data analysis was 0.2, which seems super unstable: trying 1 (in try45_v2 was 5 but that's far from my data)   
- - Trying to model with less extreme skew for magnitude 1 set max to 500,000 then 2 at 1m then 3 at 2m   
- 
-Version 10-19-2025:   
-
- - Have to change gamma shape in two places: in function call and at end when it creates all_df (map)  
- 
-Version 10-20-2025  
-
  - Changed gamma shape to 3, reverted to 1m, 2m, 3m for extreme values  
+ - 12/13/2026: Updated sample sizes per committee recommendation
+ - 01/22/2026: Added truncation as treatment (rows 143-146, 237) per committee rec.
+ 
+Other Notes: 
+ - If changing gamma shape, do in two places: in function call and at end when it creates all_df (map)  
 
 
 ```{r setup, include=FALSE}
@@ -146,6 +140,11 @@ treat_extremes <- function(x, method = "raw") {
     x[x > q95] <- m
     return(x)
   }
+  
+  if (method == "truncate") {
+    x[x >= q95] <- NA
+    return(x)
+  }
   stop("Unknown treatment method")
 }
 
@@ -236,7 +235,7 @@ summary(fit_gamma)
 n_vals <- c(5000, 10000, 20000)
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 magnitude_vals <- c(1, 2, 3)
-treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj")
+treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj", "truncate")
 
 grid <- expand.grid(
   n = n_vals,
@@ -371,13 +370,7 @@ summary(pilot_bias_summ_aov)
 
 ```  
 
-```{r coverage}
-fit_cov <- aov(ind_coverage ~ treatment, data = pilot_df)
-fit_cov
 
-kruskal.test(coverage ~ treatment, data = pilot_summ_grid)
-# gives me the same results for all 3 outcomes (coverage, emp_se, etc)
-```
 
 ```{r emp_se}
 df_empse <- pilot_df %>%
@@ -408,7 +401,7 @@ omega_squared(bias_anova)
 
 ```  
 
-```{r}
+```{r full_factorial}
 # Full factorial ANOVA: 
 # Assuming your dataset has columns:
 # Bias, SE, Coverage, Method, SampleSize, Magnitude, Proportion
@@ -425,83 +418,5 @@ lm_se <- lm(SE ~ Method * SampleSize * Magnitude * Proportion,
 lm_cov <- lm(Coverage ~ Method * SampleSize * Magnitude * Proportion, 
 						 data = all_df_gamma)
 ```
-
-
-
-
-```{r}
-library(ggplot2)
-
-custom_light_colors <- c(
-  "logit"  = "#a6dba0",  # light green
-  "gamma"  = "#fdb863",  # light orange
-  "logols" = "#b2abd2"   # light purple
-)
-
-ggplot(
-  summ_grid[summ_grid$model %in% c("logit", "gamma"), ] ,
-  aes(x = prop_extreme, y = bias, color = model)) +
-  geom_line(size = 1) +
-  facet_grid(magnitude_level ~ treatment) +
-  labs(
-    title = "Bias vs. Proportion of Extreme Values",
-    x = "Proportion of Extreme Values",
-    y = "Bias in Estimate"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "top")
-
-```  
-
-```{r}
-ggplot(summ_grid, aes(x = factor(prop_extreme), y = bias, fill = model)) +
-  geom_boxplot(position = position_dodge(width = 0.8)) +
-  scale_fill_manual(values = custom_light_colors) +
-  facet_grid(magnitude_level ~ treatment) +
-  labs(
-    title = "Bias vs. Proportion of Extreme Values",
-    x = "Proportion of Extreme Values",
-    y = "Bias"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "top")
-
-```
-
-
-```{r}
-
-ggplot(summ_grid, aes(x = factor(magnitude_level), y = rmse, fill = model)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  scale_fill_manual(values = custom_light_colors) +
-  facet_grid(n ~ treatment) +
-  labs(
-    title = "RMSE by Magnitude Level",
-    x = "Magnitude Level of Extremes",
-    y = "Root Mean Squared Error (RMSE)"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "top")
-
-
-```  
-
-```{r}
-ggplot(summ_grid, aes(x = treatment, y = coverage, fill = model)) +
-  stat_summary(fun = mean, geom = "bar", position = "dodge") +
-  scale_fill_manual(values = custom_light_colors) +
-  facet_grid(n ~ magnitude_level) +
-  labs(
-    title = "Coverage Rate by Treatment Method",
-    x = "Extreme Value Treatment",
-    y = "Coverage Probability (95% CI)"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "top")
-
-```  
-
-
-
 
 
