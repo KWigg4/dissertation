@@ -26,7 +26,7 @@ scale <- exp(linamt) / shape
 df$spend <- ifelse(df$any_spend == 1, rgamma(N, shape = shape, scale = scale), 0)
 
 
-## 2) fit tpm
+## 2) fit tpm on the whole dataset
 
 m1 <- glm(any_spend ~ treat * post, data = df, family = binomial)
 
