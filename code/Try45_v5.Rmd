@@ -126,7 +126,6 @@ simulate_panel_data <- function(
 treat_extremes <- function(x, method = "raw") {
   if (method == "raw") return(x)
 	
-	# ## THIS IS WRONG BELOW!! It takes the mean of values <=95th percentile. SHIT
   q95 <- quantile(x, 0.95, na.rm = TRUE)
   if (method == "topcode") {
     return(pmin(x, q95))
