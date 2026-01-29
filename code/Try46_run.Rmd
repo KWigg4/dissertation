@@ -9,7 +9,8 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r setup}
+```{r pkgs}
+
 pacman::p_load(
   MASS,
   dplyr,
@@ -18,12 +19,16 @@ pacman::p_load(
   readr,
   ggplot2,
   tidyr,
-  broom
+  broom,
+  here,
+  furrr  # parallel version of purrr
 )
 
 dt <- lubridate::today()
 #dir.create("results", showWarnings = FALSE)
 #dir.create("figures", showWarnings = FALSE)
+
+plan(multisession, workers = 4) # use 4 cores 
 
 ```
 
@@ -157,7 +162,7 @@ simulate_panel_data <- function(
 
   tibble(
     DUPERSID = factor(ids),
-    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, INSCOV,
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, #INSCOV,
     ind_gt0 = ind_gt0,
     TOTEXPYY = TOTEXPYY,
     extreme_flag = as.integer(seq_len(N) %in% idx_ext),
@@ -292,7 +297,8 @@ safe_gamma_fit <- function(dat) {
 # 4) ATT computation (RQ4): Estimated + TRUE using same COEF
 # ------------------------------------------------------
 
-```{r}
+```{r att}
+
 compute_ATT_hat <- function(dat, fit_logit, fit_gamma) {
 
   treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
@@ -461,6 +467,33 @@ summary(fit_logit)
 summary(fit_gamma)
 
 # ======================================================
+# Step 1z: test
+# ======================================================
+# Mini test grid
+grid_test <- expand.grid(
+  n = c(5000),                    # Just 1 sample size
+  prop_extreme = c(0.01),          # Just 1 proportion
+  magnitude_level = c(1),          # Just 1 magnitude
+  treatment = c("raw", "topcode"), # Just 2 treatments
+  stringsAsFactors = FALSE
+)
+
+set.seed(2025)
+B_test <- 10  # test 10 reps for now
+
+test_df <- pmap_dfr(
+  grid_test,
+  ~ run_mc(B_test, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
+)
+
+# Check it worked
+# print(test_df, n=Inf)
+
+# Save test simulation output
+saveRDS(test_df, file = here::here(paste0("results/test_df_", dt, ".RDS")))
+write.csv(test_df, file = here::here(paste0("results/test_df_", dt, ".csv")), row.names = FALSE)
+
+# ======================================================
 # Step 2: Full Monte Carlo across scenarios
 # ======================================================
 
@@ -480,9 +513,15 @@ grid <- expand.grid(
 set.seed(2025)
 B <- 500
 
-all_df <- pmap_dfr(
-  grid,
-  ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
+# all_df <- pmap_dfr(
+#   grid,
+#   ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
+# )
+
+all_df <- future_pmap_dfr(
+	grid,
+	~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF),
+	.options = furrr_options(seed=TRUE)
 )
 
 # Save raw simulation output
@@ -512,8 +551,6 @@ saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
 write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
 
 ```
-
-
 
 # ======================================================
 # #4 FULL-FACTORIAL ANOVA (RQ answers)
