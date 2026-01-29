@@ -217,7 +217,56 @@ treat_extremes_df <- function(dat, method = "raw") {
 
 # ------------------------------------------------------
 # 3) Safe Gamma fit wrapper (UPDATED to use zPCS)
-# ------------------------------------------------------
+# ------------------------------------------------------  
+Fits a gamma GLM to estimate DiD effect on positive expenditures only. Will return NULL if fewer than 10 positive observations to prevent fitting issues with tiny samples. In simulations, this will handle edge cases gracefully.  
+- Link function: `log` - so coefficients are interpretable as *log-rate ratios*  
+    - log(E[Y|x]]) = $\beta_0$ + ... 
+    OR  
+    - E[Y|X] = exp($\beta_0$ + ... )  
+    
+Interpreting Coefficients  
+
+For a coefficient $\beta$:  
+  - The outcome changes by a **multiplicative factor** of exp($\beta$)  
+  - exp($\beta$) is called a *rate ratio* or a *relative rate *  
+  - Examples from model:  
+    - If $\beta$_female = 0.4, then `exp(0.4)`$\approx$`1.49`, meaning Females have expenditures that are 1.49x (or 49% higher) than males, adjusting for other factors.  
+    - If $\beta$_hisp = -0.2, then `exp(-0.2)`$\approx$`0.82`, or 18% lower than non-Hispanic, adjusting for other factors.  
+    - The DiD coefficient $\beta$`_post:tx`: If you estimate $\beta$`_post:tx`$\approx$`0.15`, then `exp(0.15)`$\approx$`1.16`, meaning that the treatment increases expenditures by 16% in the post-period relative to the control group. Since our true `COEF$p2$int=0`, we expect `exp(`$\beta$`)`$\approx$`1.0` (no multiplicative effect).  
+    
+Log-rate ratios  
+  - The coefficient itself ($\beta$) is the **log** of the rate ratio  
+  - The exponentiated coefficient `exp(`$\beta$`)` is the rate ratio.  
+  
+In the DGP:  
+  - `COEF$p2$int=0` means log-rate ratio=0  
+  - This means the rate-ratio = exp(0) = 1  
+  - This means no multiplicative effect (0% change)  
+  
+This is different from linear models where coefficients are additive differences (i.e. a 1-unit increase in X leads to a $\beta_1$-unit increase in Y; this is an additive (absolute) difference, so adds to Y > like if $\beta_1$=500, the X increasing from 0 to 1 means Y increases from 5,000 to 5,000 dollars. The absolute change is constance, regardless of baseline). Here they're multiplicative factors on the original scale.)  
+
+In Gamma GLM with log link - multiplicative effects, where:  
+  - `log(E[Y|X]) = `$\beta_0$ + $\beta_1$*X  
+  - E[Y|X] = exp($\beta_0$ + $\beta_1$\*X) = exp($\beta_0$) x exp($\beta_1$*X)  
+Interpretation of $\beta_1$:  
+  - A 1-unit increase in X leads to multiplying Y by exp($\beta_1$)  
+  - This is a multiplicative (relative) difference  
+  - Example:  
+    - If $\beta_1$ = 0.2, then exp(0.2)$\approx$1.22, so X increasing from 0to 1 means:  
+      - Y increases from 5,000 to 6,100 -> +1,110 dollars (22% increase)  
+      - Y increases from 10,000 to 12,200 -> +2,200 dollars (22% increase)  
+    - The percent change is constant, but the absolute change grows with baseline.  
+    
+HCE's are naturally multiplicative:  
+  - A treatment that increases by $500 means very different things for:  
+    - Someone spending $1000/year (50% increase!)  
+    - Someone spending $50,000/year (1% increase)  
+    
+The DGP reflects this (`mu <- exp(lp_cont)`)  
+
+Null Hypothesis:  
+  - Linear model: DiD effect = 0 means "no dollar difference"  
+  - Gamma model: DiD effect = 0 means "no percentage difference" (rate ratio=1)  
 
 ```{r safe_gamma_fn}
 safe_gamma_fit <- function(dat) {
@@ -380,7 +429,7 @@ run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, 
 
 set.seed(123)
 dat_example <- simulate_panel_data(
-  n = 1000,
+  n = 5000,
   magnitude_level = 1,
   prop_extreme = 0.05,
   gamma_shape = 3,
@@ -470,7 +519,41 @@ write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv"))
 # #4 FULL-FACTORIAL ANOVA (RQ answers)
 # ======================================================
 
-```{r}
+  - `all_df_gamma` function: Isolates part 2 (gamma) results and creates a coverage indicator: 1 if 95% CI contains true value, 0 otherwise  
+  
+  - **Factorial ANOVA on gamma bias** (`aov(bias ~ ...)`) tests:  
+    - Main effects: Does each factor independently affect bias?  
+    - Interactions: Do factors combine to affect bias? (e.g., `treatment:magnitude_level` - does the best treatment change depending on how extreme the outliers are? with 4-way interaction tests to tell if optimal strategy depends on all conditions simultaneously  
+    - Unit of Analysis: Each individual replication (67500 rows for gamma)  
+    
+  - **Factorial ANOVA on gamma SE**  
+    - Tests which factors affect **precision** of estimates (e.g., does truncation increase SE more than topcoding?).  
+    - Why it matters? Bias-variance tradeoff. One method might reduce bias, but inflate variance (hurting RMSE)   
+    
+  - **Factorial ANOVA on gamma coverage**  
+    - Why scenario-level? Because coverage is a proportion (between 0 and 1); individual reps have coverage = 0 or 1 (binary), which violates ANOVA assumptions. Aggregating to scenario-level gives approximately normal proportions. Each scenario has 500 reps, so coverage estimates are quite stable.  
+    - What this tests: Do methods maintain normal coverage (~0.95)? (e.g., does "raw" (with extremes) have poor coverage due to inflated SEs?)  
+    - Gold standard: Coverage should be near 0.95; systematic deviations indicate:  
+      - <0.90: Underestimating uncertainty (SEs too small)  
+      - 0.97: Overestimating uncertainty (SEs too large, or method too conservative)  
+      
+  - **ANOVA on ATT Estimates**  
+  Two DV's:  
+  1) `aov_att_hat`: Tests if estimated ATT differs across conditions. This is less informative since true ATT = 0, so all methods *should* center near 0.  
+  2) `aov_att_bias`: Tests if ATT bias differs across conditions. This is more relevant because it shows which methods better recover truth. It's a direct test of RQ4, "Which treatment method produces least biased ATT estimates?"  
+  
+**Considerations**  
+
+ - ANOVA assumes homoscedasticity: might want to check residual plots  
+ 
+**Next steps to consider**  
+
+ - post-hoc tests (Tukey HSD) to rank treatment methods  
+ - Effect size estimates (eta-squared) to quantify importance  
+ - Visualization of key interactions  
+  
+
+```{r data_preparation}
 
 # ---- Gamma (Part 2 interaction): bias, SE, coverage ----
 all_df_gamma <- all_df %>%
@@ -491,6 +574,19 @@ summary(aov_gamma_bias)
 # B) factorial ANOVA on gamma SE (rep-level)
 aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
 summary(aov_gamma_se)
+
+# Bv2) factorial ANOVA on gamma emp SE  (KW, 01/29/26)
+summ_grid_gamma <- summ_grid |> filter(model==gamma)
+aov_gamma_emp_se <- aov(
+	emp_se ~ treatment * n * prop_extreme * magnitude_level, data = summ_grid_gamma )
+summary(aov_gamma_emp_se) 
+
+## could test ratio to see if model SE's are calibrated (how well model's claimed uncertainty matches actual uncertainty)? 
+summ_grid_gamma <- summ_grid_gamma |> 
+	mutate(se_ratio = mean_se / emp_se) 
+	# if < 1 then model underestimates uncertainty
+  # if > 1 then model overestimates uncertainty
+  # If model says SE is 0.03 but estimates vary by SD = 0.09, 0.03/0.09 = 0.33 so under calibrated (CIs too narrow / false precision, Coverage <0.95 (too many CI's miss true value), Type 1 error inflation (will reject null too often), estimates will look more precise than they are. 
 
 # C) coverage: scenario-level proportion (recommended)
 cov_grid <- all_df_gamma %>%
