@@ -1,0 +1,632 @@
+---
+title: "Untitled"
+author: "Felix"
+date: "1/29/2026"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup}
+pacman::p_load(
+  MASS,
+  dplyr,
+  tibble,
+  purrr,
+  readr,
+  ggplot2,
+  tidyr,
+  broom
+)
+
+dt <- lubridate::today()
+#dir.create("results", showWarnings = FALSE)
+#dir.create("figures", showWarnings = FALSE)
+
+```
+
+# ======================================================
+# Monte Carlo for Two-Part Model with Extreme Treatments
+# (UPDATED: shared COEF + zPCS + RQ4 ATT + factorial ANOVA + plots)
+# ======================================================
+
+# ------------------------------------------------------
+# 0) ONE SOURCE OF TRUTH: DGP COEFFICIENTS (Try45-aligned)
+# ------------------------------------------------------
+# Matches your original DGP:
+# Part 1: 0.2*post - 0.2*tx + 1.2*female - 0.8*hisp - 0.2*zPCS
+# Part 2: 7 + 0.2*post + 0.2*tx + 0.4*female - 0.2*hisp - 0.4*zPCS
+# NOTE: Your original DGP has NO post*tx interaction (int = 0).
+```{r coefs_helpers}
+COEF <- list(
+  p1 = list(b0 = 0.0, post = 0.2, tx = -0.2, int = 0.0,
+            female = 1.2, hisp = -0.8, zpcs = -0.2),
+  p2 = list(b0 = 7.0, post = 0.2, tx =  0.2, int = 0.0,
+            female = 0.4, hisp = -0.2, zpcs = -0.4)
+)
+
+# --- helper: log-uniform draw for extremes ---
+rlogunif <- function(n, min_val, max_val) {
+  if (n <= 0) return(numeric(0))
+  exp(runif(n, log(min_val), log(max_val)))
+}
+
+# --- helper: extreme value ranges ---
+extreme_range <- function(mag_level) {
+  switch(as.character(mag_level),
+         "1" = c(5e4, 1e6),
+         "2" = c(5e4, 2e6),
+         "3" = c(5e4, 3e6),
+         stop("Invalid magnitude_level"))
+}
+
+```
+
+
+
+# ------------------------------------------------------
+# 1) DGP: two-part Gamma with extremes (UPDATED to use COEF)
+# ------------------------------------------------------
+
+```{r}
+simulate_panel_data <- function(
+  n, magnitude_level, prop_extreme = 0.01,
+  p_treated = 0.5, sigma_u = 0.5, rho = 0.5,
+  gamma_shape = 3,
+  COEF
+) {
+  T <- 2; N <- n * T
+  ids <- rep(1:n, each = T)
+  ind_post <- rep(0:1, times = n)
+
+  # covariates
+  ind_tx_i     <- rbinom(n, 1, p_treated)
+  ind_female_i <- rbinom(n, 1, 0.5)
+  HISPANX_i    <- rbinom(n, 1, 0.2)
+  INSCOV_i     <- sample(1:3, n, replace = TRUE)
+
+  ind_tx     <- rep(ind_tx_i, each = T)
+  ind_female <- rep(ind_female_i, each = T)
+  HISPANX    <- rep(HISPANX_i, each = T)
+  INSCOV     <- factor(rep(INSCOV_i, each = T))
+
+  # PCS42 with correlation (keep your approach)
+  Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
+  pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
+  PCS42 <- as.vector(t(pcs))
+  zPCS  <- (PCS42 - 50) / 10  # standardized PCS42
+
+  # random intercept (kept for fidelity; not used in lp by design)
+  u_i <- rnorm(n, 0, sigma_u)
+  u   <- u_i[ids]
+
+  # Part 1: logistic >0 (use COEF)
+  lp_cov <- COEF$p1$b0 +
+    COEF$p1$post   * ind_post +
+    COEF$p1$tx     * ind_tx +
+    COEF$p1$int    * (ind_post * ind_tx) +
+    COEF$p1$female * ind_female +
+    COEF$p1$hisp   * HISPANX +
+    COEF$p1$zpcs   * zPCS
+
+  pr_pos  <- plogis(lp_cov)
+  ind_gt0 <- rbinom(N, 1, pr_pos)
+
+  # Part 2: Gamma for positives (use COEF)
+  lp_cont <- COEF$p2$b0 +
+    COEF$p2$post   * ind_post +
+    COEF$p2$tx     * ind_tx +
+    COEF$p2$int    * (ind_post * ind_tx) +
+    COEF$p2$female * ind_female +
+    COEF$p2$hisp   * HISPANX +
+    COEF$p2$zpcs   * zPCS
+
+  mu <- exp(lp_cont)
+  shape <- gamma_shape
+  scale <- mu / shape
+
+  TOTEXPYY <- rep(0, N)
+  TOTEXPYY[ind_gt0 == 1] <- rgamma(sum(ind_gt0),
+                                   shape = shape,
+                                   scale = scale[ind_gt0 == 1])
+
+  # inject extremes
+  K_ext <- rbinom(1, N, prop_extreme)
+  if (K_ext > 0) {
+    rng <- extreme_range(magnitude_level)
+    idx_ext <- sample.int(N, size = K_ext, replace = FALSE)
+    TOTEXPYY[idx_ext] <- rlogunif(K_ext, rng[1], rng[2])
+  } else idx_ext <- integer(0)
+
+  tibble(
+    DUPERSID = factor(ids),
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, INSCOV,
+    ind_gt0 = ind_gt0,
+    TOTEXPYY = TOTEXPYY,
+    extreme_flag = as.integer(seq_len(N) %in% idx_ext),
+    magnitude_level, prop_extreme
+  )
+}
+
+
+```
+
+
+
+# ------------------------------------------------------
+# 2) Treatments for extreme values (UPDATED)
+# - mean/median preserved uses values > q95 only
+# - truncation removes rows (not NA)
+# ------------------------------------------------------
+
+```{r}
+treat_extremes_df <- function(dat, method = "raw") {
+  if (method == "raw") return(dat)
+
+  q95 <- quantile(dat$TOTEXPYY, 0.95, na.rm = TRUE)
+
+  if (method == "topcode") {
+    dat$TOTEXPYY <- pmin(dat$TOTEXPYY, q95)
+    return(dat)
+  }
+
+  if (method == "mean_adj") {
+    m <- mean(dat$TOTEXPYY[dat$TOTEXPYY > q95], na.rm = TRUE)
+    dat$TOTEXPYY[dat$TOTEXPYY > q95] <- m
+    return(dat)
+  }
+
+  if (method == "median_adj") {
+    m <- median(dat$TOTEXPYY[dat$TOTEXPYY > q95], na.rm = TRUE)
+    dat$TOTEXPYY[dat$TOTEXPYY > q95] <- m
+    return(dat)
+  }
+
+  if (method == "truncate") {
+    dat <- dat %>% filter(TOTEXPYY <= q95)
+    return(dat)
+  }
+
+  stop("Unknown treatment method")
+}
+
+```
+
+
+
+# ------------------------------------------------------
+# 3) Safe Gamma fit wrapper (UPDATED to use zPCS)
+# ------------------------------------------------------
+
+```{r}
+safe_gamma_fit <- function(dat) {
+  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  if (nrow(dat2) < 10) return(NULL)
+
+  out <- tryCatch({
+    glm(
+      TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+      data = dat2,
+      family = Gamma(link = "log"),
+      control = glm.control(maxit = 100, epsilon = 1e-8)
+    )
+  }, error = function(e) NULL)
+
+  out
+}
+
+```
+
+
+# ------------------------------------------------------
+# 4) ATT computation (RQ4): Estimated + TRUE using same COEF
+# ------------------------------------------------------
+
+```{r}
+compute_ATT_hat <- function(dat, fit_logit, fit_gamma) {
+
+  treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
+  if (nrow(treated_post) == 0) return(NA_real_)
+
+  treated_cf <- treated_post %>% mutate(ind_tx = 0)
+
+  # Part 1: Pr(Y>0)
+  p_obs <- predict(fit_logit, newdata = treated_post, type = "response")
+  p_cf  <- predict(fit_logit, newdata = treated_cf,   type = "response")
+
+  # Part 2: E[Y|Y>0] (Gamma log link; response is on original scale)
+  mu_obs <- predict(fit_gamma, newdata = treated_post, type = "response")
+  mu_cf  <- predict(fit_gamma, newdata = treated_cf,   type = "response")
+
+  mean(p_obs * mu_obs - p_cf * mu_cf)
+}
+
+compute_true_ATT <- function(dat, COEF) {
+
+  treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
+  if (nrow(treated_post) == 0) return(NA_real_)
+
+  treated_cf <- treated_post %>% mutate(ind_tx = 0)
+
+  # TRUE Part 1
+  lp1_obs <- COEF$p1$b0 +
+    COEF$p1$post   * treated_post$ind_post +
+    COEF$p1$tx     * treated_post$ind_tx +
+    COEF$p1$int    * (treated_post$ind_post * treated_post$ind_tx) +
+    COEF$p1$female * treated_post$ind_female +
+    COEF$p1$hisp   * treated_post$HISPANX +
+    COEF$p1$zpcs   * treated_post$zPCS
+  p_obs <- plogis(lp1_obs)
+
+  lp1_cf <- COEF$p1$b0 +
+    COEF$p1$post   * treated_cf$ind_post +
+    COEF$p1$tx     * treated_cf$ind_tx +
+    COEF$p1$int    * (treated_cf$ind_post * treated_cf$ind_tx) +
+    COEF$p1$female * treated_cf$ind_female +
+    COEF$p1$hisp   * treated_cf$HISPANX +
+    COEF$p1$zpcs   * treated_cf$zPCS
+  p_cf <- plogis(lp1_cf)
+
+  # TRUE Part 2
+  lp2_obs <- COEF$p2$b0 +
+    COEF$p2$post   * treated_post$ind_post +
+    COEF$p2$tx     * treated_post$ind_tx +
+    COEF$p2$int    * (treated_post$ind_post * treated_post$ind_tx) +
+    COEF$p2$female * treated_post$ind_female +
+    COEF$p2$hisp   * treated_post$HISPANX +
+    COEF$p2$zpcs   * treated_post$zPCS
+  mu_obs <- exp(lp2_obs)
+
+  lp2_cf <- COEF$p2$b0 +
+    COEF$p2$post   * treated_cf$ind_post +
+    COEF$p2$tx     * treated_cf$ind_tx +
+    COEF$p2$int    * (treated_cf$ind_post * treated_cf$ind_tx) +
+    COEF$p2$female * treated_cf$ind_female +
+    COEF$p2$hisp   * treated_cf$HISPANX +
+    COEF$p2$zpcs   * treated_cf$zPCS
+  mu_cf <- exp(lp2_cf)
+
+  mean(p_obs * mu_obs - p_cf * mu_cf)
+}
+
+```
+
+
+
+# ------------------------------------------------------
+# 5) One replication under one scenario (UPDATED)
+# - uses zPCS in models
+# - returns interaction estimates + ATT outputs
+# - keeps long format: model = logit/gamma/ATT
+# ------------------------------------------------------
+
+```{r}
+run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+
+  dat <- simulate_panel_data(
+    n = n,
+    magnitude_level = magnitude_level,
+    prop_extreme = prop_extreme,
+    gamma_shape = gamma_shape,
+    COEF = COEF
+  )
+
+  # Apply treatment at the DATAFRAME level
+  dat <- treat_extremes_df(dat, treatment)
+
+  # Logistic
+  fit1 <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+              data = dat, family = binomial)
+  c1 <- coef(summary(fit1))["ind_post:ind_tx", c("Estimate","Std. Error")]
+
+  # Gamma fit object (safe)
+  fit2 <- safe_gamma_fit(dat)
+  if (is.null(fit2)) {
+    c2 <- c(NA_real_, NA_real_)
+  } else {
+    c2 <- coef(summary(fit2))["ind_post:ind_tx", c("Estimate","Std. Error")]
+  }
+
+  # ATT requires gamma object
+  ATT_hat <- if (!is.null(fit2)) compute_ATT_hat(dat, fit1, fit2) else NA_real_
+  ATT_true <- compute_true_ATT(dat, COEF)
+  ATT_bias <- ATT_hat - ATT_true
+
+  tibble(
+    model = c("logit", "gamma", "ATT"),
+    est   = c(unname(c1[1]), unname(c2[1]), ATT_hat),
+    se    = c(unname(c1[2]), unname(c2[2]), NA_real_),
+    true  = c(COEF$p1$int, COEF$p2$int, ATT_true),
+    bias  = c(unname(c1[1]) - COEF$p1$int,
+              unname(c2[1]) - COEF$p2$int,
+              ATT_bias),
+    n = n, prop_extreme, magnitude_level, gamma_shape, treatment
+  )
+}
+
+run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+  results <- replicate(
+    B,
+    run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF),
+    simplify = FALSE
+  )
+  bind_rows(results)
+}
+
+# ======================================================
+# Step 1: Representative dataset (histograms + model fits)
+# ======================================================
+
+set.seed(123)
+dat_example <- simulate_panel_data(
+  n = 1000,
+  magnitude_level = 1,
+  prop_extreme = 0.05,
+  gamma_shape = 3,
+  COEF = COEF
+)
+
+p1 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "skyblue", color = "black") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY", x = "Spending", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "seagreen", color = "black") +
+  scale_x_log10(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY (log scale)", x = "Spending (log)", y = "Count") +
+  theme_minimal()
+
+print(p1); print(p2)
+
+fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+                 data = dat_example, family = binomial)
+
+fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+                 data = dat_example %>% filter(ind_gt0 == 1),
+                 family = Gamma(link = "log"))
+
+summary(fit_logit)
+summary(fit_gamma)
+
+# ======================================================
+# Step 2: Full Monte Carlo across scenarios
+# ======================================================
+
+n_vals <- c(5000, 10000, 20000)
+prop_extreme_vals <- c(0.01, 0.05, 0.10)
+magnitude_vals <- c(1, 2, 3)
+treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj", "truncate")
+
+grid <- expand.grid(
+  n = n_vals,
+  prop_extreme = prop_extreme_vals,
+  magnitude_level = magnitude_vals,
+  treatment = treatment_methods,
+  stringsAsFactors = FALSE
+)
+
+set.seed(2025)
+B <- 500
+
+all_df <- pmap_dfr(
+  grid,
+  ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
+)
+
+# Save raw simulation output
+saveRDS(all_df, file = here::here(paste0("results/all_df_", dt, ".RDS")))
+write.csv(all_df, file = here::here(paste0("results/all_df_", dt, ".csv")), row.names = FALSE)
+
+# ======================================================
+# Summarise results (includes ATT row)
+# ======================================================
+summ_grid <- all_df %>%
+  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+  summarise(
+    mean_est = round(mean(est, na.rm = TRUE), 6),
+    mean_true = round(mean(true, na.rm = TRUE), 6),
+    bias     = round(mean(bias, na.rm = TRUE), 6),
+    emp_se   = round(sd(est, na.rm = TRUE), 6),
+    rmse     = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage = round(mean((est - 1.96*se <= true) &
+                          (true <= est + 1.96*se), na.rm = TRUE), 6),
+    n_fail   = sum(is.na(est)),
+    .groups = "drop"
+  )
+
+print(summ_grid)
+
+saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
+write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
+
+```
+
+
+
+# ======================================================
+# #4 FULL-FACTORIAL ANOVA (RQ answers)
+# ======================================================
+
+```{r}
+
+# ---- Gamma (Part 2 interaction): bias, SE, coverage ----
+all_df_gamma <- all_df %>%
+  dplyr::filter(model == "gamma") %>%
+  dplyr::mutate(
+    n = factor(n),
+    prop_extreme = factor(prop_extreme),
+    magnitude_level = factor(magnitude_level),
+    treatment = factor(treatment),
+    cover_ind = ifelse(is.na(est) | is.na(se), NA_real_,
+                       as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se)))
+  )
+
+# A) factorial ANOVA on gamma bias (rep-level)
+aov_gamma_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
+summary(aov_gamma_bias)
+
+# B) factorial ANOVA on gamma SE (rep-level)
+aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
+summary(aov_gamma_se)
+
+# C) coverage: scenario-level proportion (recommended)
+cov_grid <- all_df_gamma %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
+
+aov_gamma_cov <- aov(coverage ~ treatment * n * prop_extreme * magnitude_level, data = cov_grid)
+summary(aov_gamma_cov)
+
+# ---- ATT (RQ4): ATT_hat and ATT_bias across treatments ----
+all_df_att <- all_df %>%
+  dplyr::filter(model == "ATT") %>%
+  dplyr::mutate(
+    n = factor(n),
+    prop_extreme = factor(prop_extreme),
+    magnitude_level = factor(magnitude_level),
+    treatment = factor(treatment)
+  )
+
+# ATT_hat across conditions
+aov_att_hat <- aov(est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
+summary(aov_att_hat)
+
+# ATT_bias across conditions (recommended DV)
+aov_att_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
+summary(aov_att_bias)
+
+# Save ANOVA-ready datasets
+write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".csv")), row.names = FALSE)
+write.csv(all_df_att,   file = here::here(paste0("results/all_df_att_", dt, ".csv")), row.names = FALSE)
+write.csv(cov_grid,     file = here::here(paste0("results/cov_grid_", dt, ".csv")), row.names = FALSE)
+
+```
+
+
+
+# ======================================================
+# Publication-ready plots (faceted)
+# ======================================================
+
+```{r}
+
+# ---- 1) Gamma bias by treatment (scenario-level mean bias) ----
+gamma_grid <- all_df_gamma %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    mean_se   = mean(se, na.rm = TRUE),
+    coverage  = mean(cover_ind, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p_gamma_bias <- ggplot(gamma_grid, aes(x = treatment, y = mean_bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Mean Bias by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean bias (est - true)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_bias)
+ggsave(here::here(paste0("figures/gamma_bias_by_treatment_", dt, ".png")),
+       p_gamma_bias, width = 10, height = 7, dpi = 300)
+
+# ---- 2) Gamma SE by treatment ----
+p_gamma_se <- ggplot(gamma_grid, aes(x = treatment, y = mean_se)) +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Mean Model SE by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean SE"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_se)
+ggsave(here::here(paste0("figures/gamma_se_by_treatment_", dt, ".png")),
+       p_gamma_se, width = 10, height = 7, dpi = 300)
+
+# ---- 3) Gamma coverage by treatment ----
+p_gamma_cov <- ggplot(gamma_grid, aes(x = treatment, y = coverage)) +
+  geom_hline(yintercept = 0.95, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Coverage by Treatment",
+    subtitle = "Dashed line = nominal 0.95; Rows = prop extreme; Cols = magnitude",
+    x = "Treatment method",
+    y = "Coverage"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_cov)
+ggsave(here::here(paste0("figures/gamma_coverage_by_treatment_", dt, ".png")),
+       p_gamma_cov, width = 10, height = 7, dpi = 300)
+
+# ---- 4) ATT_hat by treatment (scenario-level mean ATT_hat) ----
+att_grid <- all_df_att %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(
+    mean_ATT_hat = mean(est, na.rm = TRUE),
+    mean_ATT_bias = mean(bias, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p_att_hat <- ggplot(att_grid, aes(x = treatment, y = mean_ATT_hat)) +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "ATT_hat (RQ4): Mean Estimated ATT by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean ATT_hat"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_att_hat)
+ggsave(here::here(paste0("figures/att_hat_by_treatment_", dt, ".png")),
+       p_att_hat, width = 10, height = 7, dpi = 300)
+
+# ---- 5) ATT_bias by treatment ----
+p_att_bias <- ggplot(att_grid, aes(x = treatment, y = mean_ATT_bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "ATT_bias (RQ4): Mean ATT Bias by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean ATT bias (ATT_hat - ATT_true)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_att_bias)
+ggsave(here::here(paste0("figures/att_bias_by_treatment_", dt, ".png")),
+       p_att_bias, width = 10, height = 7, dpi = 300)
+
+# Also export scenario-level grids for tables
+write.csv(gamma_grid, file = here::here(paste0("results/gamma_grid_", dt, ".csv")), row.names = FALSE)
+write.csv(att_grid,   file = here::here(paste0("results/att_grid_", dt, ".csv")), row.names = FALSE)
+```
+
+
