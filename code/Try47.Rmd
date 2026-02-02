@@ -76,12 +76,12 @@ simulate_panel_data <- function(
   ind_tx_i     <- rbinom(n, 1, p_treated)
   ind_female_i <- rbinom(n, 1, 0.5)
   HISPANX_i    <- rbinom(n, 1, 0.2)
-  INSCOV_i     <- sample(1:3, n, replace = TRUE)
+  #INSCOV_i     <- sample(1:3, n, replace = TRUE)
 
   ind_tx     <- rep(ind_tx_i, each = T)
   ind_female <- rep(ind_female_i, each = T)
   HISPANX    <- rep(HISPANX_i, each = T)
-  INSCOV     <- factor(rep(INSCOV_i, each = T))
+  #INSCOV     <- factor(rep(INSCOV_i, each = T))
 
   # PCS42 with correlation (keep your approach)
   Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
@@ -288,7 +288,7 @@ compute_true_ATT <- function(dat, COEF) {
     COEF$p2$post   * treated_cf$ind_post +
     COEF$p2$tx     * treated_cf$ind_tx +
     COEF$p2$int    * (treated_cf$ind_post * treated_cf$ind_tx) +
-    COEF$p2$female * treated_cf$female +
+    COEF$p2$female * treated_cf$ind_female +
     COEF$p2$hisp   * treated_cf$HISPANX +
     COEF$p2$zpcs   * treated_cf$zPCS
   mu_cf <- exp(lp2_cf)

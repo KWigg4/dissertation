@@ -167,7 +167,8 @@ simulate_panel_data <- function(
     ind_gt0 = ind_gt0,
     TOTEXPYY = TOTEXPYY,
     extreme_flag = as.integer(seq_len(N) %in% idx_ext),
-    magnitude_level, prop_extreme
+    magnitude_level, 
+    prop_extreme
   )
 }
 
@@ -506,33 +507,6 @@ summary(fit_logit)
 summary(fit_gamma)
 
 # ======================================================
-# Step 1z: test
-# ======================================================
-# Mini grid
-grid_test <- expand.grid(
-  n = c(5000),                    # Just 1 sample size
-  prop_extreme = c(0.01),          # Just 1 proportion
-  magnitude_level = c(1),          # Just 1 magnitude
-  treatment = c("raw", "topcode"), # Just 2 treatments
-  stringsAsFactors = FALSE
-)
-
-set.seed(2025)
-B_test <- 10  # test 10 reps for now
-
-test_df <- pmap_dfr(
-  grid_test,
-  ~ run_mc(B_test, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
-)
-
-# Check it worked
-# print(test_df, n=Inf)
-
-# Save test simulation output
-saveRDS(test_df, file = here::here(paste0("results/test_df_", dt, ".RDS")))
-write.csv(test_df, file = here::here(paste0("results/test_df_", dt, ".csv")), row.names = FALSE)
-
-# ======================================================
 # Step 2: Full Monte Carlo across scenarios
 # ======================================================
 
@@ -562,7 +536,7 @@ B <- 500
 ES_REF <- "control_pre"
 
 
-all_df <- future_pmap_dfr(
+all_df <- pmap_dfr(
 	grid,
 	~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF, es_ref=ES_REF),
 	.options = furrr_options(seed=TRUE)
