@@ -21,6 +21,7 @@ pacman::p_load(
   tidyr,
   broom,
   here,
+  scales,
   furrr  # parallel version of purrr
 )
 
@@ -87,7 +88,7 @@ extreme_range <- function(mag_level) {
     - Mean 50, then standardizes to zPCS (mean 0, SD 10)  
     - To capture realistic correlation in health status over time  
   - Random effects generated, but not actually used in linear predictors  
-  - TPM part 2: gamma distribution with fixed shape = 3, scale adjusted for each observation (gamma has 2 parameterizations: Shape-Rate [`shape` and `rate`] and Shape-Scale [`shape` and `scale` > what this code is using...]). Their relationship is `mean=shape*scale`. In code, for each observation, the shape parameter stays constant (at 3) but scale parameter varies based on that observation's covariates to ensure `E[TOTEXPYY | covariates] = mu = exp(lp_cont)`. All obs will have the same shape (to control distributional form / variance) but different scales (controls the mean). This is how to implement a GLM-style Gamma regression where the mean depends on covariates but the coefficient of variation stays constant.  
+  - TPM part 2: gamma distribution with fixed shape = 3, scale adjusted for each observation (gamma's 2 parameterizations: Shape-Rate [`shape` and `rate`] and Shape-Scale [`shape` and `scale` > what this code is using...]). Their relationship is `mean=shape*scale`. In code, for each observation, the shape parameter stays constant (at 3) but scale parameter varies based on that observation's covariates to ensure `E[TOTEXPYY | covariates] = mu = exp(lp_cont)`. All obs will have the same shape (to control distributional form / variance) but different scales (controls the mean). This is how to implement a GLM-style Gamma regression where the mean depends on covars but the coeff. of variation stays constant.  
   
 
 ```{r dgp}
@@ -181,10 +182,6 @@ simulate_panel_data <- function(
 # - truncation removes rows (not NA)
 # ------------------------------------------------------
 
- - `mean_adj` calculates mean of all values >q95 and replaces those extreme values with that mean. This allows us to preserve sample size and is less aggressive than topcoding as it allows variation among extremes.  
- - `median_adj` same as `mean_adj` but uses median instead. This is more robust to super-extreme values than `mean_adj`  
- 
-
 ```{r treatments}
 treat_extremes_df <- function(dat, method = "raw") {
   if (method == "raw") return(dat)
@@ -223,8 +220,8 @@ treat_extremes_df <- function(dat, method = "raw") {
 # ------------------------------------------------------
 # 3) Safe Gamma fit wrapper (UPDATED to use zPCS)
 # ------------------------------------------------------  
-Fits a gamma GLM to estimate DiD effect on positive expenditures only. Will return NULL if fewer than 10 positive observations to prevent fitting issues with tiny samples. In simulations, this will handle edge cases gracefully.  
-- Link function: `log` - so coefficients are interpretable as *log-rate ratios*  
+Fit a gamma GLM to estimate DiD effect on positive expenditures only. Returns NULL if fewer than 10 positive observations (prevents fitting issues with tiny samples). Will handle edge cases gracefully in simulations.  
+- Link function: `log` (coefficients are interpretable as *log-rate ratios*)  
     - log(E[Y|x]]) = $\beta_0$ + ... 
     OR  
     - E[Y|X] = exp($\beta_0$ + ... )  
@@ -290,7 +287,34 @@ safe_gamma_fit <- function(dat) {
   out
 }
 
+
+```  
+
+```{r es_att}
+# 3b) Effect size helper: baseline reference SD
+compute_sd_ref <- function(dat, ref = c("control_pre", "pooled_pre", "control_all")) {
+
+  if (missing(dat) || is.null(dat)) {
+    stop("compute_sd_ref(): you must pass a data.frame/tibble as 'dat' (e.g., compute_sd_ref(dat, ref='control_pre')).")
+  }
+
+  ref <- match.arg(ref)
+
+  dref <- switch(
+    ref,
+    control_pre = dat %>% dplyr::filter(ind_tx == 0, ind_post == 0),
+    pooled_pre  = dat %>% dplyr::filter(ind_post == 0),
+    control_all = dat %>% dplyr::filter(ind_tx == 0)
+  )
+
+  sd_ref <- sd(dref$TOTEXPYY, na.rm = TRUE)
+
+  # guard against degenerate / invalid SD
+  if (!is.finite(sd_ref) || sd_ref <= 0) return(NA_real_)
+  sd_ref
+}
 ```
+
 
 
 # ------------------------------------------------------
@@ -377,8 +401,8 @@ compute_true_ATT <- function(dat, COEF) {
 # ------------------------------------------------------
 
 ```{r runs}
-run_one <- function(
-		n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
+                    es_ref = "control_pre") {
 
   dat <- simulate_panel_data(
     n = n,
@@ -404,10 +428,18 @@ run_one <- function(
     c2 <- coef(summary(fit2))["ind_post:ind_tx", c("Estimate","Std. Error")]
   }
 
+
   # ATT requires gamma object
   ATT_hat <- if (!is.null(fit2)) compute_ATT_hat(dat, fit1, fit2) else NA_real_
   ATT_true <- compute_true_ATT(dat, COEF)
   ATT_bias <- ATT_hat - ATT_true
+  
+    # --- Effect size (Cohen's d style): standardize ATT by baseline SD ---
+  sd_ref <- compute_sd_ref(dat, ref = es_ref)
+  d_hat  <- ifelse(is.na(ATT_hat)  || is.na(sd_ref), NA_real_, ATT_hat  / sd_ref)
+  d_true <- ifelse(is.na(ATT_true) || is.na(sd_ref), NA_real_, ATT_true / sd_ref)
+  d_bias <- d_hat - d_true
+
 
   tibble(
     model = c("logit", "gamma", "ATT"),
@@ -417,14 +449,20 @@ run_one <- function(
     bias  = c(unname(c1[1]) - COEF$p1$int,
               unname(c2[1]) - COEF$p2$int,
               ATT_bias),
+    
+    # effect-size columns (only meaningful for ATT row; NA for others)
+    d_est  = c(NA_real_, NA_real_, d_hat),
+    d_true = c(NA_real_, NA_real_, d_true),
+    d_bias = c(NA_real_, NA_real_, d_bias),
+
     n = n, prop_extreme, magnitude_level, gamma_shape, treatment
   )
 }
 
-run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF, es_ref="control_pre") {
   results <- replicate(
     B,
-    run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF),
+    run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF, es_ref=es_ref),
     simplify = FALSE
   )
   bind_rows(results)
@@ -519,9 +557,14 @@ B <- 500
 #   ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF)
 # )
 
+# Effect size reference group choice:
+# "control_pre" (recommended), "pooled_pre", or "control_all"
+ES_REF <- "control_pre"
+
+
 all_df <- future_pmap_dfr(
 	grid,
-	~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF),
+	~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF, es_ref=ES_REF),
 	.options = furrr_options(seed=TRUE)
 )
 
@@ -542,6 +585,11 @@ summ_grid <- all_df %>%
     rmse     = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
     coverage = round(mean((est - 1.96*se <= true) &
                           (true <= est + 1.96*se), na.rm = TRUE), 6),
+        # Effect size summary (ATT rows only; NA otherwise)
+    d_mean   = round(mean(d_est, na.rm = TRUE), 6),
+    d_emp_se = round(sd(d_est, na.rm = TRUE), 6),
+    d_bias   = round(mean(d_bias, na.rm = TRUE), 6),
+
     n_fail   = sum(is.na(est)),
     .groups = "drop"
   )
@@ -636,6 +684,11 @@ summary(aov_att_hat)
 # ATT_bias across conditions (recommended DV)
 aov_att_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
 summary(aov_att_bias)
+
+# Effect size (d_est) across conditions (optional but usually helpful)
+aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
+summary(aov_att_d)
+
 
 # Save ANOVA-ready datasets
 write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".csv")), row.names = FALSE)
@@ -765,6 +818,5 @@ ggsave(here::here(paste0("figures/att_bias_by_treatment_", dt, ".png")),
 # Also export scenario-level grids for tables
 write.csv(gamma_grid, file = here::here(paste0("results/gamma_grid_", dt, ".csv")), row.names = FALSE)
 write.csv(att_grid,   file = here::here(paste0("results/att_grid_", dt, ".csv")), row.names = FALSE)
-```
-
+```  
 
