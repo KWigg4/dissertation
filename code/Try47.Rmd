@@ -133,7 +133,7 @@ simulate_panel_data <- function(
 
   tibble(
     DUPERSID = factor(ids),
-    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, INSCOV,
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, #INSCOV,
     ind_gt0 = ind_gt0,
     TOTEXPYY = TOTEXPYY,
     extreme_flag = as.integer(seq_len(N) %in% idx_ext),
@@ -472,8 +472,8 @@ summ_grid <- all_df %>%
 
 print(summ_grid)
 
-#saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
-#write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
+saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
+write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
 
 ```
 
@@ -492,13 +492,22 @@ all_df_gamma <- all_df %>%
                        as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se)))
   )
 
+saveRDS(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".RDS")))
+write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".csv")), row.names = FALSE)
+
 # A) factorial ANOVA on gamma bias (rep-level)
 aov_gamma_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
 summary(aov_gamma_bias)
 
 # B) factorial ANOVA on gamma SE (rep-level)  <-- model SE
-aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
-summary(aov_gamma_se)
+# aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
+# summary(aov_gamma_se)
+
+# B v2) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
+summ_grid_gamma <- summ_grid |> filter(model=="gamma")
+aov_gamma_emp_se <- aov(
+	emp_se ~ treatment * n * prop_extreme * magnitude_level, data = summ_grid_gamma )
+summary(aov_gamma_emp_se) 
 
 # C) coverage: scenario-level proportion (recommended)
 cov_grid <- all_df_gamma %>%
