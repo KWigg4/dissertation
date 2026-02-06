@@ -35,5 +35,29 @@ ipums1 <- ipums0 %>%
 
 		# Age restriction for treatment and control groups
 		AGELAST %in% c(23, 24, 25, 27, 28, 29)
-	)
+	) |>
+	mutate(prepost = if_else(YEAR < 2011, "pre", "post"))
 # 20355
+
+ipums1_both <- ipums1 |>
+	select(MEPSID, prepost) |>
+	tidyr::pivot_wider(
+		values_from = prepost,
+		names_from = prepost)
+
+ipums1_complete_ids <-ipums1 %>%
+	distinct(MEPSID, prepost) %>%
+	count(MEPSID) %>%
+	filter(n == 2) %>%              # must have both pre and post
+	pull(MEPSID)
+# 765 : way smaller
+
+# 2. Filter to complete cases only
+ipums1_complete <- ipums1 %>%
+	dplyr::filter(MEPSID %in% ipums1_complete_ids) |>
+	group_by(MEPSID) |>
+	mutate(n_MEPSID=n()) |>
+	ungroup()
+# 1530
+
+summary(ipums1_complete$EXPTOT)

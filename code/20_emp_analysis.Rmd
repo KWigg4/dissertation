@@ -31,6 +31,53 @@ meps <- readRDS(here::here("data_processed/fyc_processed.RDS")) |>
 
 ```  
 
+### zPCS correlation, prepost  
+
+DO NOT USE - DUPERSID isn't right... 
+
+Get prepost correlation for zPCS  
+
+ - First had to average the values where 2 DUPERSID records in pre or post  
+ - Pivot wider, count complete cases  
+
+```{r corr_meps, eval=FALSE}
+
+# 1: Some ids had >1 tp per prepost: 
+n_gt1_ids <- meps %>%
+  summarise(n = n(), .by = c(DUPERSID, ind_post)) %>%
+  filter(n > 1) |> 
+	nrow()   # 3797 of 16640 (22.82%)
+
+# 2: Avg the records from multiple dupersids by prepost
+zpcs_avg_mult <- meps |> 
+  group_by(DUPERSID, ind_post) %>%
+  summarise(zPCS42 = mean(zPCS42, na.rm = TRUE), .groups = "drop")
+
+# pivot
+zpcs_wide <- zpcs_avg_mult |> 
+  pivot_wider(names_from = ind_post, values_from = zPCS42, names_prefix = "zPCS42_") |> 
+  mutate(complete_obs = if_else(
+    (!is.na(zPCS42_1) & !is.na(zPCS42_0) ), 1, 0
+  ))
+
+n_corr_cases <- sum(zpcs_wide$complete_obs)
+
+# 4: Corr
+zpcs_corr <- cor(zpcs_wide$zPCS42_0, zpcs_wide$zPCS42_1, use = "complete.obs")
+# 0.4302
+
+```  
+
+Results:  
+
+ - N=`r n_corr_cases` complete cases (of `r nrow(zpcs_wide)`)  
+ - Correlation coefficient = `r zpcs_corr`  
+ 
+## Processing Complete Cases
+Find complete cases, average TOTEXPYY & Zpcs if >1 for each timeframe, keep other factors 
+NOOOO! DUPERSID not safe to use across years (i.e. after 2018)
+I found a person who was younger in 2013 than they were in 2008, 2009 (DUPERSID=40247103). Multiple examples. 
+
 Percentiles:  
 (And which is closer to 50k?)  
 
@@ -49,7 +96,8 @@ n_gt95th <- meps |> filter(TOTEXPYY>p95) |> nrow() #832
 
 
 
-## Table One  
+## Table One   
+
 ```{r}
 meps |> 
 	select(
@@ -73,6 +121,7 @@ meps |>
 	add_p() |> 
 	add_overall()
 ```
+
 
 
 
@@ -294,49 +343,22 @@ qqcomp(list(fit_gamma, fit_lnorm, fit_weibull), legendtext = plot.legend)
 
 
 
-### zPCS correlation, prepost  
 
-Get prepost correlation for zPCS  
-
- - First had to average the values where 2 DUPERSID records in pre or post  
- - Pivot wider, count complete cases  
-
-```{r corr_meps}
-
-# 1: Some ids had >1 tp per prepost: 
-n_gt1_ids <- meps %>%
-  summarise(n = n(), .by = c(DUPERSID, ind_post)) %>%
-  filter(n > 1) |> 
-	nrow()   # 3797 of 16640!
-
-# 2: Avg the records from multiple dupersids by prepost
-zpcs_avg_mult <- meps |> 
-  group_by(DUPERSID, ind_post) %>%
-  summarise(zPCS42 = mean(zPCS42, na.rm = TRUE), .groups = "drop")
-
-# pivot
-zpcs_wide <- zpcs_avg_mult |> 
-  pivot_wider(names_from = ind_post, values_from = zPCS42, names_prefix = "zPCS42_") |> 
-  mutate(complete_obs = if_else(
-    (!is.na(zPCS42_1) & !is.na(zPCS42_0) ), 1, 0
-  ))
-
-n_corr_cases <- sum(zpcs_wide$complete_obs)
-
-# 4: Corr
-zpcs_corr <- cor(zpcs_wide$zPCS42_0, zpcs_wide$zPCS42_1, use = "complete.obs")
-# 0.4302
-
-```  
-
-Results:  
-
- - N=`r n_corr_cases` complete cases (of `r nrow(zpcs_wide)`)  
- - Correlation coefficient = `r zpcs_corr`  
 
 ### Logit model  
 
 Without random intercept because couldn't get conditional model to converge with random intercept. Do all without.   
+
+```{r}
+cor(meps |> select(TOTEXPYY, zPCS42))
+gtsummary::tbl_summary(
+	data = meps,
+	by = ind_post, 
+	include = c(ind_post,  zPCS42)
+)
+
+```
+
 
 
 ```{r logit_noRI}
@@ -433,6 +455,7 @@ emp_gamma_mixed <- glmer(
   ))
 ```  
 
-## Homoskedasticity  
+
+
 
 
