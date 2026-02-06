@@ -38,10 +38,42 @@ dir.create("results", showWarnings = FALSE)
 dir.create("figures", showWarnings = FALSE)
 
 all_df <- readRDS(here::here("results/all_df_2026-02-05.RDS"))
-cov_grid <- read.csv(here::here("results/cov_grid_2026-02-05.csv"))
-att_grid <- read.csv(here::here("results/att_grid_2026-02-05.csv"))
 
 ```  
+#Summarise results (includes ATT effect size columns)
+```{r summ_grid}
+summ_grid <- all_df %>%
+  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+  summarise(
+    mean_est  = round(mean(est, na.rm = TRUE), 6),
+    mean_true = round(mean(true, na.rm = TRUE), 6),
+    bias      = round(mean(bias, na.rm = TRUE), 6),
+
+    emp_se = round(sd(est, na.rm = TRUE), 6),
+    rmse   = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+
+    coverage = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
+      6
+    ),
+
+    # Effect size summary (ATT rows only; NA otherwise)
+    d_mean   = round(mean(d_est, na.rm = TRUE), 6),
+    d_emp_se = round(sd(d_est, na.rm = TRUE), 6),
+    d_bias   = round(mean(d_bias, na.rm = TRUE), 6),
+
+    n_fail = sum(is.na(est)),
+    .groups = "drop"
+  )
+
+print(summ_grid)
+
+saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
+write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
+
+```  
+
+
 
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
@@ -146,6 +178,145 @@ write.csv(all_df_att, file = here::here(paste0("results/all_df_att_", dt, ".csv"
 write.csv(cov_grid,   file = here::here(paste0("results/cov_grid_", dt, ".csv")), row.names = FALSE)
 
 ```  
+
+#Publication-ready plots
+
+```{r eval=FALSE}
+# ---- 1) Gamma bias by treatment (scenario-level mean bias) ----
+gamma_grid <- all_df_gamma %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    mean_se   = mean(se, na.rm = TRUE),
+    coverage  = mean(cover_ind, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p_gamma_bias <- ggplot(gamma_grid, aes(x = treatment, y = mean_bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Mean Bias by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean bias (est - true)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_bias)
+ggsave(here::here(paste0("figures/gamma_bias_by_treatment_", dt, ".png")),
+       p_gamma_bias, width = 10, height = 7, dpi = 300)
+
+# ---- 2) Gamma SE by treatment ----
+p_gamma_se <- ggplot(gamma_grid, aes(x = treatment, y = mean_se)) +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Mean Model SE by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean SE"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_se)
+ggsave(here::here(paste0("figures/gamma_se_by_treatment_", dt, ".png")),
+       p_gamma_se, width = 10, height = 7, dpi = 300)
+
+# ---- 3) Gamma coverage by treatment ----
+p_gamma_cov <- ggplot(gamma_grid, aes(x = treatment, y = coverage)) +
+  geom_hline(yintercept = 0.95, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "Gamma (Part 2) Interaction: Coverage by Treatment",
+    subtitle = "Dashed line = nominal 0.95; Rows = prop extreme; Cols = magnitude",
+    x = "Treatment method",
+    y = "Coverage"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_gamma_cov)
+ggsave(here::here(paste0("figures/gamma_coverage_by_treatment_", dt, ".png")),
+       p_gamma_cov, width = 10, height = 7, dpi = 300)
+
+# ---- 4) ATT_hat and effect size by treatment ----
+att_grid <- all_df_att %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(
+    mean_ATT_hat  = mean(est, na.rm = TRUE),
+    mean_ATT_bias = mean(bias, na.rm = TRUE),
+    mean_d        = mean(d_est, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p_att_hat <- ggplot(att_grid, aes(x = treatment, y = mean_ATT_hat)) +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "ATT_hat (RQ4): Mean Estimated ATT by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean ATT_hat"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_att_hat)
+ggsave(here::here(paste0("figures/att_hat_by_treatment_", dt, ".png")),
+       p_att_hat, width = 10, height = 7, dpi = 300)
+
+p_att_bias <- ggplot(att_grid, aes(x = treatment, y = mean_ATT_bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "ATT_bias (RQ4): Mean ATT Bias by Treatment",
+    subtitle = "Rows = proportion extreme; Cols = magnitude level",
+    x = "Treatment method",
+    y = "Mean ATT bias (ATT_hat - ATT_true)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_att_bias)
+ggsave(here::here(paste0("figures/att_bias_by_treatment_", dt, ".png")),
+       p_att_bias, width = 10, height = 7, dpi = 300)
+
+# ---- 6) Effect size (d) by treatment (optional but recommended) ----
+p_att_d <- ggplot(att_grid, aes(x = treatment, y = mean_d)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line(aes(group = 1)) +
+  facet_grid(prop_extreme ~ magnitude_level, labeller = label_both) +
+  labs(
+    title = "ATT Effect Size (d): Mean Standardized ATT by Treatment",
+    subtitle = paste0("Standardized by baseline SD (", ES_REF, "); Rows = prop extreme; Cols = magnitude"),
+    x = "Treatment method",
+    y = "Mean d (ATT / baseline SD)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+print(p_att_d)
+ggsave(here::here(paste0("figures/att_effect_size_d_by_treatment_", dt, ".png")),
+       p_att_d, width = 10, height = 7, dpi = 300)
+
+# Export scenario-level grids for tables
+write.csv(gamma_grid, file = here::here(paste0("results/gamma_grid_", dt, ".csv")), row.names = FALSE)
+write.csv(att_grid,   file = here::here(paste0("results/att_grid_", dt, ".csv")), row.names = FALSE)
+
+```
+
 
 
 ```{r descr}
@@ -515,8 +686,6 @@ for (i in seq_along(gt_cov_list)) {
 
 ```  
 
-
-
 ## Over/under estimation  
 
 ```{r over_underests}
@@ -574,3 +743,359 @@ gt_consistency <- tab_consistency %>%
 
 gt_consistency
 ```    
+
+
+## Plots  
+
+### Lollipop  
+
+```{r plots_dir}
+
+plot_bias_lollipop <- scenario_stats %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_of_means = mean(bias, na.rm = TRUE),
+    sd_of_means   = sd(bias, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(sign = ifelse(mean_of_means < 0, "Underestimation (−)", "Overestimation (+)"),
+         treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate")) %>%
+  ggplot(aes(x = treatment, y = mean_of_means, color = sign)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_segment(aes(xend = treatment, y = 0, yend = mean_of_means), linewidth = 1.2) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("Underestimation (−)" = "#C7372F", "Overestimation (+)" = "#2B6CB0")) +
+  labs(
+    title = "Gamma Interaction: Average Scenario-Mean Bias by Treatment",
+    subtitle = "Positive = overestimation; Negative = underestimation",
+    x = NULL, y = "Average of scenario means (bias)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+plot_bias_lollipop
+ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
+       plot_bias_lollipop, width = 8, height = 5, dpi = 300)
+```  
+
+
+### lollipop x2  
+```{r lolli_v2}
+# Reuse your scenario-level summary table for the Gamma interaction
+summ_gamma <- summ_grid %>%
+  dplyr::filter(model == "gamma") %>%
+  dplyr::mutate(
+    treatment = forcats::fct_relevel(
+      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
+    ),
+    # scenario id string and absolute bias to plot
+    scen_id = paste0("prop=", prop_extreme, " | mag=", magnitude_level, " | n=", n),
+    abs_bias = abs(bias)
+  )
+
+# Option 1: one lollipop per scenario: 
+
+make_lollipop <- function(df_one_scen) {
+  scen_lab <- df_one_scen$scen_id[1]
+  ggplot(df_one_scen, aes(x = abs_bias, y = treatment)) +
+    geom_segment(aes(x = 0, xend = abs_bias, y = treatment, yend = treatment),
+                 linewidth = 1.2, color = "grey55") +
+    geom_point(size = 3, color = "#2B6CB0") +
+    geom_text(aes(label = scales::number(abs_bias, accuracy = 0.0001)),
+              nudge_x = 0.002, size = 3.1, hjust = 0) +
+    labs(
+      title = "Absolute Bias by Treatment (Scenario Lollipop)",
+      subtitle = scen_lab,
+      x = "Absolute bias |bias| (scenario mean across reps)",
+      y = NULL
+    ) +
+    scale_x_continuous(expand = expansion(mult = c(0, .10))) +
+    theme_minimal() +
+    theme(panel.grid.major.y = element_blank())
+}
+
+# Split by scenario and save each plot
+by_scenario <- split(summ_gamma, summ_gamma$scen_id)
+
+for (nm in names(by_scenario)) {
+  p <- make_lollipop(by_scenario[[nm]])
+  out_path <- here::here(paste0("figures/lollipop_absbias_", gsub("[^A-Za-z0-9]+", "_", nm), "_", dt, ".png"))
+  ggsave(out_path, p, width = 7.5, height = 4.5, dpi = 300)
+}
+
+```  
+
+### Trend lines for how bias change with mag of extremes, prop of extremes 
+```{r trend_lines}
+# --- Trend lines including n as a scenario condition ---
+# Treat magnitude level as numeric for trend fitting
+scenario_stats_num <- scenario_stats %>%
+  dplyr::mutate(
+    mag = as.numeric(as.character(magnitude_level)),
+    treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate"),
+    n = as.factor(n)  # factor for clean facet labels
+  )
+
+plot_trends <- ggplot(
+  scenario_stats_num,
+  aes(x = mag, y = bias, color = treatment, group = treatment)
+) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  stat_summary(fun = mean, geom = "line", linewidth = 1.1) +
+  stat_summary(fun = mean, geom = "point", size = 2) +
+  facet_grid(n ~ prop_extreme, labeller = label_both) +
+  scale_x_continuous(breaks = c(1, 2, 3), labels = c("1", "2", "3")) +
+  labs(
+    title = "Gamma Interaction: Trend in Mean Bias Across Magnitude of Extremes",
+    subtitle = "Rows = n; Cols = proportion extreme; lines show scenario-means averaged at each magnitude level",
+    x = "Magnitude level", y = "Scenario-mean bias"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+plot_trends
+ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
+       plot_trends, width = 11, height = 7, dpi = 300)
+```  
+
+2C. Coverage heatmap vs nominal 0.95  
+```{r plot_cov_heat}
+plot_cov_heat <- summ_gamma %>%
+  dplyr::mutate(
+    treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate"),
+    cell = paste0("prop=", prop_extreme, ", mag=", magnitude_level, ", n=", n)
+  ) %>%
+  ggplot(aes(x = treatment, y = cell, fill = coverage)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "#C7372F", mid = "white", high = "#2B6CB0",
+    midpoint = 0.95, limits = c(0, 1), labels = scales::percent
+  ) +
+  labs(
+    title = "Gamma Interaction: Coverage by Treatment and Scenario",
+    subtitle = "Blue ≥ nominal 95%; red shows undercoverage; y-label encodes prop, mag, and n",
+    x = "Treatment", y = "Scenario (prop, mag, n)", fill = "Coverage"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+plot_cov_heat
+ggsave(here::here(paste0("figures/gamma_coverage_heat_", dt, ".png")),
+       plot_cov_heat, width = 11, height = 8, dpi = 300)
+```    
+
+2D. Consistency bars: % of scenarios with majority underestimation  
+```{r fig_underest}
+
+plot_under_consistency <- scenario_stats %>%
+  group_by(treatment) %>%
+  summarise(share_under_majority = mean(under_majority, na.rm = TRUE), .groups = "drop") %>%
+  mutate(treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate")) %>%
+  ggplot(aes(treatment, share_under_majority)) +
+  geom_col(fill = "#C7372F") +
+  geom_text(aes(label = scales::percent(share_under_majority, accuracy = 0.1)),
+            vjust = -0.3) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Gamma Interaction: Consistency of Underestimation by Treatment",
+    subtitle = "% of scenarios where >50% of reps underestimated",
+    x = NULL, y = "% scenarios"
+  ) +
+  theme_minimal()
+
+plot_under_consistency
+ggsave(here::here(paste0("figures/gamma_under_consistency_", dt, ".png")),
+       plot_under_consistency, width = 8, height = 5, dpi = 300)
+```  
+
+3. Auto-generate sentences  
+Summarize direction, magnitude, reliability per treatment using tables above  
+```{r sentences}
+sentences <- tab_consistency %>%
+  mutate(
+    dir = ifelse(as.numeric(avg_mean_bias) < 0, "underestimated", "overestimated"),
+    abs_avg = abs(as.numeric(avg_mean_bias)),
+    txt = glue::glue(
+      "On average across {n_scen} scenarios, the {treatment} method {dir} ",
+      "the Gamma interaction by {scales::number(abs_avg, accuracy = 0.0001)}. ",
+      "Median scenario-mean bias was {med_mean_bias}. ",
+      "{scales::percent(share_scen_under, accuracy = 0.1)} of scenarios had negative mean bias, ",
+      "and {scales::percent(share_scen_under_majority, accuracy = 0.1)} showed majority underestimation. ",
+      "Mean empirical SE was {mean_emp_se}, and mean coverage was {scales::percent(mean_cov, accuracy = 0.1)}."
+    )
+  ) %>%
+  dplyr::pull(txt)
+
+cat(paste0("- ", sentences, collapse = "\n"))
+```  
+
+## ANOVA effect-size reporting for eta-squared with p-values    
+
+Reusable helper to extract eta-squared and p-values from an aov object  
+This should pull p-values from `broom::tidy()` and eta-sq from `effectsize::eta_squared()`
+which matches with how ANOVAs are already fit. 
+```{r aov_eta_helper}
+eta_with_p <- function(aov_obj, model_label,
+                       type = c("eta2", "partial", "generalized"),
+                       include_ci = TRUE, conf_level = 0.90) {
+  type <- match.arg(type)
+
+  # ---- 1) Get a tidy ANOVA table and a reliable p-value column ----
+  # Try broom::tidy() first
+  tab <- tryCatch(broom::tidy(aov_obj), error = function(e) NULL)
+
+  if (is.null(tab)) {
+    # Fallback: coerce to data.frame (works for car::Anova and aov objects)
+    tab <- as.data.frame(aov_obj)
+    # Move term names from rownames into a column
+    tab <- tibble::rownames_to_column(tab, var = "term")
+  }
+
+  # Normalize the 'term' column name if broom gave a different label
+  if (!("term" %in% names(tab))) {
+    term_col <- grep("^term$|^Term$|^Effect$|^Parameter$", names(tab), value = TRUE)
+    if (length(term_col) == 1L) names(tab)[names(tab) == term_col] <- "term"
+  }
+
+  # Identify/construct p-values:
+  if (!("p.value" %in% names(tab))) {
+    # Look for common alternatives like Pr(>F), Pr..F., etc.
+    pv_alt <- grep("^Pr\\(>F\\)$|^Pr[.].*F[.]?$|^pval$|^p_value$", names(tab), value = TRUE)
+    if (length(pv_alt) == 1L) {
+      names(tab)[names(tab) == pv_alt] <- "p.value"
+    } else {
+      # As a last resort, try to compute p from F and dfs
+      # Find F statistic and dfs
+      f_col   <- grep("^F$|^F value$|^statistic$", names(tab), value = TRUE)
+      df1_col <- grep("^df$|^Df1$|^num_df$|^num\\.df$", names(tab), value = TRUE)
+      df2_col <- grep("^Df2$|^den_df$|^den\\.df$|^Residuals|^residual.df$|^error.df$", names(tab), value = TRUE)
+
+      if (length(f_col) == 1L && length(df1_col) >= 1L && length(df2_col) >= 1L) {
+        # Heuristic: If there is a single 'df' column, it might be numerator df; get denominator df from residuals row if present
+        if (length(df1_col) == 1L && length(df2_col) == 1L) {
+          Fval <- tab[[f_col]]
+          df1  <- tab[[df1_col]]
+          df2  <- tab[[df2_col]]
+          tab$p.value <- stats::pf(Fval, df1, df2, lower.tail = FALSE)
+        } else {
+          # If structure is ambiguous, set NA and let the rest continue
+          tab$p.value <- NA_real_
+        }
+      } else {
+        tab$p.value <- NA_real_
+      }
+    }
+  }
+
+  # Keep only needed columns and drop residuals row if present
+  tab_p <- tab %>%
+    dplyr::filter(!is.na(term), term != "Residuals") %>%
+    dplyr::select(term, p.value)
+
+  # ---- 2) effect sizes from effectsize::eta_squared() ----
+  ci_arg <- if (include_ci) conf_level else NULL
+  es <- switch(
+    type,
+    eta2 = effectsize::eta_squared(aov_obj, ci = ci_arg),
+    partial = effectsize::eta_squared(aov_obj, partial = TRUE, ci = ci_arg),
+    generalized = effectsize::eta_squared(aov_obj, generalized = TRUE, ci = ci_arg)
+  ) %>% as.data.frame()
+
+  # Standardize common column names
+  nm <- names(es)
+  if ("Parameter" %in% nm) names(es)[nm == "Parameter"] <- "term"
+  if ("Effect"    %in% nm) names(es)[nm == "Effect"]    <- "term"
+  if ("Term"      %in% nm) names(es)[nm == "Term"]      <- "term"
+
+  eta_col <- grep("^Eta2", names(es), value = TRUE)
+  if (length(eta_col) == 1L) names(es)[names(es) == eta_col] <- "eta2"
+  if ("CI_low"  %in% names(es)) names(es)[names(es) == "CI_low"]  <- "ci_low"
+  if ("CI_high" %in% names(es)) names(es)[names(es) == "CI_high"] <- "ci_high"
+  if (!("ci_low" %in% names(es))) {
+    ci_low_guess <- grep("^CI[_\\.]?low", names(es), value = TRUE)
+    if (length(ci_low_guess) == 1L) names(es)[names(es) == ci_low_guess] <- "ci_low"
+  }
+  if (!("ci_high" %in% names(es))) {
+    ci_high_guess <- grep("^CI[_\\.]?high", names(es), value = TRUE)
+    if (length(ci_high_guess) == 1L) names(es)[names(es) == ci_high_guess] <- "ci_high"
+  }
+
+  # ---- 3) Merge and label ----
+  out <- dplyr::left_join(es, tab_p, by = "term") %>%
+    dplyr::mutate(
+      model  = model_label,
+      es_type = switch(type, "eta2" = "eta^2", "partial" = "partial eta^2", "generalized" = "generalized eta^2"),
+      stars = dplyr::case_when(
+        !is.na(p.value) & p.value < .001 ~ "***",
+        !is.na(p.value) & p.value < .01  ~ "**",
+        !is.na(p.value) & p.value < .05  ~ "*",
+        !is.na(p.value) & p.value < .10  ~ "†",
+        TRUE ~ ""
+      )
+    ) %>%
+    dplyr::select(model, es_type, term, eta2,
+                  dplyr::any_of(c("ci_low", "ci_high")),
+                  p.value, stars)
+
+  out
+}
+```  
+
+Apply to ANOVAs and build tables 
+Groups rows by model (gamma bias, gamma coverage, ATT: bias), reports partial eta-eq, 90% CI, p-value, and sign. marks.
+
+If we want Type II/III SS rather than the Type I default of `aov()`, can refit with `car::Anova()` and pass that object to `effectsize::eta_squared()`. (ASK TSAI)  
+
+```{r}
+# ---- Collect effect sizes for all models ----
+es_eta2 <- dplyr::bind_rows(
+  eta_with_p(aov_gamma_bias,   "Gamma bias",         "eta2"),
+  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "eta2"),
+  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "eta2"),
+  eta_with_p(aov_att_hat,      "ATT: est",           "eta2"),
+  eta_with_p(aov_att_bias,     "ATT: bias",          "eta2"),
+  eta_with_p(aov_att_d,        "ATT: d_est",         "eta2")
+)
+
+es_partial <- dplyr::bind_rows(
+  eta_with_p(aov_gamma_bias,   "Gamma bias",         "partial"),
+  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "partial"),
+  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "partial"),
+  eta_with_p(aov_att_hat,      "ATT: est",           "partial"),
+  eta_with_p(aov_att_bias,     "ATT: bias",          "partial"),
+  eta_with_p(aov_att_d,        "ATT: d_est",         "partial")
+)
+
+es_gen <- dplyr::bind_rows(
+  eta_with_p(aov_gamma_bias,   "Gamma bias",         "generalized"),
+  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "generalized"),
+  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "generalized"),
+  eta_with_p(aov_att_hat,      "ATT: est",           "generalized"),
+  eta_with_p(aov_att_bias,     "ATT: bias",          "generalized"),
+  eta_with_p(aov_att_d,        "ATT: d_est",         "generalized")
+)
+
+# ---- Main table: partial eta^2 with p-values ----
+tbl_partial <- es_partial %>%
+  dplyr::mutate(
+    eta2_fmt = ifelse(is.na(eta2), NA_character_, scales::number(eta2, accuracy = 0.0001)),
+    ci_fmt = dplyr::if_else(
+      is.na(ci_low) | is.na(ci_high), "—",
+      paste0("[", scales::number(ci_low, accuracy = 0.0001), ", ",
+                  scales::number(ci_high, accuracy = 0.0001), "]")
+    ),
+    p_fmt = ifelse(is.na(p.value), "—", scales::pvalue(p.value, accuracy = 0.001))
+  ) %>%
+  dplyr::select(model, term, `partial eta^2` = eta2_fmt, CI = ci_fmt, `p-value` = p_fmt, sig = stars)
+
+gt_partial <- tbl_partial %>%
+  gt::gt(groupname_col = "model") %>%
+  gt::tab_header(
+    title = gt::md("**ANOVA Effects: Partial η² with 90% CI and p-values**"),
+    subtitle = "Design factors: treatment, n, prop_extreme, magnitude_level"
+  ) %>%
+  gt::tab_source_note("Signif.: *** < .001, ** < .01, * < .05, † < .10") %>%
+  gt::cols_align(align = "center", columns = c(`partial eta^2`, CI, `p-value`, sig))
+
+gt_partial
+```  
