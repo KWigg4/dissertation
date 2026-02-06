@@ -22,7 +22,6 @@ pacman::p_load(
   ggrepel,
   glue,
   gt,
-  gtsummary,
   here,
   lubridate,
   MASS,
@@ -31,11 +30,6 @@ pacman::p_load(
   scales,
   tibble,
   tidyr)
-
-conflicted::conflicts_prefer(
-  dplyr::select(),
-  dplyr::filter()
-)
 
 dt <- lubridate::today()
 dir.create("results", showWarnings = FALSE)
@@ -350,6 +344,7 @@ run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, CO
   ATT_bias <- ATT_hat - ATT_true
 
   # --- Effect size (Cohen's d style): standardize ATT by baseline SD ---
+  # d = ATT / SD_(Y|tx=0 & post=0) (non-treated pre group) Dr Tsai will check
   sd_ref <- compute_sd_ref(dat, ref = es_ref)
   d_hat  <- ifelse(is.na(ATT_hat)  || is.na(sd_ref), NA_real_, ATT_hat  / sd_ref)
   d_true <- ifelse(is.na(ATT_true) || is.na(sd_ref), NA_real_, ATT_true / sd_ref)
@@ -488,7 +483,9 @@ print(summ_grid)
 saveRDS(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".RDS")))
 write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv")), row.names = FALSE)
 
-```
+```  
+
+
 
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
@@ -535,7 +532,7 @@ write.csv(
   here::here(paste0("results/aov_gamma_bias_", dt, ".csv")))
 
 eta_squared(aov_gamma_bias, partial=TRUE) # for partial eta squared (or general?)
-
+eta_squared(aov_gamma_bias, partial=FALSE)
 
 # B) factorial ANOVA on gamma SE (rep-level)  <-- model SE
 # aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
@@ -568,6 +565,8 @@ aov_gamma_cov_rep <- aov(
 
 # Sanity check: residual df should be > 0
 summary(aov_gamma_cov_rep)[[1]]["Residuals","Df"]
+
+eta_squared(aov_gamma_cov_rep, partial=TRUE) 
 
 # ---- ATT (RQ4): ATT_hat, ATT_bias, and effect size across treatments ----
 all_df_att <- all_df %>%
@@ -637,6 +636,61 @@ gt_gamma_bias_overall <- tab_gamma_bias_overall %>%
   ) %>%
   gt::tab_options(data_row.padding = gt::px(1))
 
+# Helper for quantiles (same as before)
+q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+
+tab_bias_full_overall <- summ_gamma %>%
+  dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    scenarios        = dplyr::n(),
+    mean_bias        = mean(bias, na.rm = TRUE),
+    sd_bias          = sd(bias, na.rm = TRUE),
+    median_bias      = median(bias, na.rm = TRUE),
+    mad_bias         = mad(bias, na.rm = TRUE),
+    min_bias         = min(bias, na.rm = TRUE),
+    q1_bias          = q_fun(bias, 0.25),
+    q3_bias          = q_fun(bias, 0.75),
+    iqr_bias         = q3_bias - q1_bias,
+    max_bias         = max(bias, na.rm = TRUE),
+    mean_abs_bias    = mean(abs(bias), na.rm = TRUE),
+    share_bias_neg   = mean(bias < 0, na.rm = TRUE),
+    share_bias_pos   = mean(bias > 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+gt_bias_full_overall <- tab_bias_full_overall %>%
+  dplyr::mutate(
+    dplyr::across(
+      c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, q3_bias, iqr_bias, max_bias, mean_abs_bias),
+      ~ scales::number(.x, accuracy = 0.0001)
+    ),
+    share_bias_neg = scales::percent(share_bias_neg, accuracy = 0.1),
+    share_bias_pos = scales::percent(share_bias_pos, accuracy = 0.1)
+  ) %>%
+  gt::gt() %>%
+  gt::tab_header(
+    title = "Gamma Interaction — Full Descriptive Statistics: Bias",
+    subtitle = "Scenario-level bias (mean signed bias per scenario) summarized across scenarios by treatment"
+  ) %>%
+  gt::cols_label(
+    scenarios      = "N scenarios",
+    mean_bias      = "Mean",
+    sd_bias        = "SD",
+    median_bias    = "Median",
+    mad_bias       = "MAD",
+    min_bias       = "Min",
+    q1_bias        = "Q1",
+    q3_bias        = "Q3",
+    iqr_bias       = "IQR",
+    max_bias       = "Max",
+    mean_abs_bias  = "Mean |bias|",
+    share_bias_neg = "Share bias < 0",
+    share_bias_pos = "Share bias > 0"
+  ) %>%
+  gt::tab_options(data_row.padding = gt::px(1))
+
+gt_bias_full_overall
+
 # ---- Empirical SE (overall) ----
 tab_gamma_empse_overall <- summ_gamma %>%
   dplyr::group_by(treatment) %>%
@@ -658,6 +712,54 @@ gt_gamma_empse_overall <- tab_gamma_empse_overall %>%
     subtitle = "Empirical SE = Monte Carlo SD of the estimator across replications"
   ) %>%
   gt::tab_options(data_row.padding = gt::px(1))
+
+# Helper to get quantiles safely
+q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+
+tab_empse_full_overall <- summ_gamma %>%
+  dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    scenarios       = dplyr::n(),
+    mean_emp_se     = mean(emp_se, na.rm = TRUE),
+    sd_emp_se       = sd(emp_se, na.rm = TRUE),
+    median_emp_se   = median(emp_se, na.rm = TRUE),
+    mad_emp_se      = mad(emp_se, na.rm = TRUE),
+    min_emp_se      = min(emp_se, na.rm = TRUE),
+    q1_emp_se       = q_fun(emp_se, 0.25),
+    q3_emp_se       = q_fun(emp_se, 0.75),
+    iqr_emp_se      = q3_emp_se - q1_emp_se,
+    max_emp_se      = max(emp_se, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+gt_empse_full_overall <- tab_empse_full_overall %>%
+  dplyr::mutate(
+    dplyr::across(
+      c(mean_emp_se, sd_emp_se, median_emp_se, mad_emp_se,
+        min_emp_se, q1_emp_se, q3_emp_se, iqr_emp_se, max_emp_se),
+      ~ scales::number(.x, accuracy = 0.0001)
+    )
+  ) %>%
+  gt::gt() %>%
+  gt::tab_header(
+    title = "Gamma Interaction — Full Descriptive Statistics: Empirical SE",
+    subtitle = "Scenario-level empirical SE (Monte Carlo SD of the estimator) summarised across scenarios by treatment"
+  ) %>%
+  gt::cols_label(
+    scenarios = "N scenarios",
+    mean_emp_se = "Mean",
+    sd_emp_se = "SD",
+    median_emp_se = "Median",
+    mad_emp_se = "MAD",
+    min_emp_se = "Min",
+    q1_emp_se = "Q1",
+    q3_emp_se = "Q3",
+    iqr_emp_se = "IQR",
+    max_emp_se = "Max"
+  ) %>%
+  gt::tab_options(data_row.padding = gt::px(1))
+
+gt_empse_full_overall
 
 # ---- Coverage (overall) ----
 tab_gamma_cov_overall <- summ_gamma %>%
@@ -684,6 +786,58 @@ gt_gamma_cov_overall <- tab_gamma_cov_overall %>%
 # Stratified tables by prop_extreme * n * magnitude level 
 # A tiny formatter for numeric columns
 num4 <- function(x) scales::number(x, accuracy = 0.0001)
+
+tab_cov_full_overall <- summ_gamma %>%
+  dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    scenarios         = dplyr::n(),
+    mean_cov          = mean(coverage, na.rm = TRUE),
+    sd_cov            = sd(coverage, na.rm = TRUE),
+    median_cov        = median(coverage, na.rm = TRUE),
+    mad_cov           = mad(coverage, na.rm = TRUE),
+    min_cov           = min(coverage, na.rm = TRUE),
+    q1_cov            = q_fun(coverage, 0.25),
+    q3_cov            = q_fun(coverage, 0.75),
+    iqr_cov           = q3_cov - q1_cov,
+    max_cov           = max(coverage, na.rm = TRUE),
+    # policy-relevant shares around nominal 0.95
+    p_cov_below_95    = mean(coverage < 0.95, na.rm = TRUE),
+    p_cov_ge_95       = mean(coverage >= 0.95, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+gt_cov_full_overall <- tab_cov_full_overall %>%
+  dplyr::mutate(
+    # format coverage fields as percents where appropriate
+    dplyr::across(
+      c(mean_cov, sd_cov, median_cov, mad_cov, min_cov, q1_cov, q3_cov, iqr_cov, max_cov),
+      ~ scales::percent(.x, accuracy = 0.1)
+    ),
+    p_cov_below_95 = scales::percent(p_cov_below_95, accuracy = 0.1),
+    p_cov_ge_95    = scales::percent(p_cov_ge_95, accuracy = 0.1)
+  ) %>%
+  gt::gt() %>%
+  gt::tab_header(
+    title = "Gamma Interaction — Full Descriptive Statistics: Coverage",
+    subtitle = "Scenario-level coverage summarised across scenarios by treatment (nominal: 95%)"
+  ) %>%
+  gt::cols_label(
+    scenarios = "N scenarios",
+    mean_cov = "Mean",
+    sd_cov = "SD",
+    median_cov = "Median",
+    mad_cov = "MAD",
+    min_cov = "Min",
+    q1_cov = "Q1",
+    q3_cov = "Q3",
+    iqr_cov = "IQR",
+    max_cov = "Max",
+    p_cov_below_95 = "Share < 95%",
+    p_cov_ge_95    = "Share ≥ 95%"
+  ) %>%
+  gt::tab_options(data_row.padding = gt::px(1))
+
+gt_cov_full_overall
 
 # Factory that returns a gt table for a given data frame + header labels
 make_gt_table <- function(df, title, subtitle) {
