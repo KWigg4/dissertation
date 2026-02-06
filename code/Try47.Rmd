@@ -10,19 +10,24 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r}
+```{r pkgs}
 pacman::p_load(
   MASS,
   dplyr,
   tibble,
   purrr,
+  furrr,
   readr,
   ggplot2,
   tidyr,
   broom,
   lubridate,
   here,
-  scales
+  scales,
+  glue,
+  gt,
+  forcats,
+  ggrepel
 )
 
 dt <- lubridate::today()
@@ -34,7 +39,7 @@ dir.create("figures", showWarnings = FALSE)
 
 #0) ONE SOURCE OF TRUTH: DGP COEFFICIENTS
 
-```{r}
+```{r helpers}
 COEF <- list(
   p1 = list(b0 = 0.0, post = 0.2, tx = -0.2, int = 0.0,
             female = 1.2, hisp = -0.8, zpcs = -0.2),
@@ -61,7 +66,7 @@ extreme_range <- function(mag_level) {
 
 #1) DGP: two-part Gamma with extremes
 
-```{r}
+```{r sim}
 simulate_panel_data <- function(
   n, magnitude_level, prop_extreme = 0.01,
   p_treated = 0.5, sigma_u = 0.5, rho = 0.5,
@@ -148,7 +153,7 @@ simulate_panel_data <- function(
 # - mean/median preserved uses values > q95 only
 # - truncation removes rows (not NA)
 
-```{r}
+```{r treatments}
 treat_extremes_df <- function(dat, method = "raw") {
   if (method == "raw") return(dat)
 
@@ -183,7 +188,7 @@ treat_extremes_df <- function(dat, method = "raw") {
 
 #3) Safe Gamma fit wrapper
 
-```{r}
+```{r safe_gamma}
 safe_gamma_fit <- function(dat) {
   dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
   if (nrow(dat2) < 10) return(NULL)
@@ -203,7 +208,7 @@ safe_gamma_fit <- function(dat) {
 ```
 
 #3b) Effect size helper:
-```{r}
+```{r es_helper}
 compute_sd_ref <- function(dat, ref = c("control_pre", "pooled_pre", "control_all")) {
 
   if (missing(dat) || is.null(dat)) {
@@ -229,7 +234,7 @@ compute_sd_ref <- function(dat, ref = c("control_pre", "pooled_pre", "control_al
 ```
 
 #4) ATT computation (RQ4): Estimated + TRUE using same COEF
-```{r}
+```{r att}
 compute_ATT_hat <- function(dat, fit_logit, fit_gamma) {
 
   treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
@@ -304,7 +309,7 @@ compute_true_ATT <- function(dat, COEF) {
 - returns interaction estimates + ATT outputs
 - adds ATT effect size (d_est, d_true, d_bias) using baseline SD
 
-```{r}
+```{r run_one}
 run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
                     es_ref = "control_pre") {
 
@@ -411,7 +416,7 @@ summary(fit_gamma)
 ```
 
 #Step 2: Full Monte Carlo across scenarios
-```{r}
+```{r full_mc}
 n_vals <- c(5000, 10000, 20000)
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 magnitude_vals <- c(1, 2, 3)
@@ -432,14 +437,15 @@ B <- 500
 # "control_pre" (recommended), "pooled_pre", or "control_all"
 ES_REF <- "control_pre"
 
-all_df <- pmap_dfr(
+all_df <- furrr::future_pmap_dfr(
   grid,
-  ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF, es_ref = ES_REF)
+  ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF, es_ref = ES_REF),
+  .options=furrr::furrr_options(seed=TRUE)
 )
 
 # Save raw simulation output
 saveRDS(all_df, file = here::here(paste0("results/all_df_", dt, ".RDS")))
-write.csv(all_df, file = here::here(paste0("results/all_df_", dt, ".csv")), row.names = FALSE)
+write.csv(all_df, file = here::here(paste0("results/all_df_", dt, ".csv")))
 
 ```
 
@@ -498,6 +504,11 @@ write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".
 # A) factorial ANOVA on gamma bias (rep-level)
 aov_gamma_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
 summary(aov_gamma_bias)
+aov_gamma_bias_df <- as.data.frame(summary(aov_gamma_bias)[[1]])
+tidy_aov <- tidy(aov_gamma_bias)
+write.csv(
+  tidy_aov,
+  here::here(paste0("results/aov_gamma_bias_", dt, ".csv")))
 
 # B) factorial ANOVA on gamma SE (rep-level)  <-- model SE
 # aov_gamma_se <- aov(se ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
@@ -540,16 +551,95 @@ aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = 
 summary(aov_att_d)
 
 # Save ANOVA-ready datasets
-write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".csv")), row.names = FALSE)
-write.csv(all_df_att,   file = here::here(paste0("results/all_df_att_", dt, ".csv")), row.names = FALSE)
-write.csv(cov_grid,     file = here::here(paste0("results/cov_grid_", dt, ".csv")), row.names = FALSE)
+write.csv(all_df_att, file = here::here(paste0("results/all_df_att_", dt, ".csv")), row.names = FALSE)
+write.csv(cov_grid,   file = here::here(paste0("results/cov_grid_", dt, ".csv")), row.names = FALSE)
 
+```  
+
+
+```{r descr}
+# Focus on the Gamma Part-2 interaction (can switch to "ATT" similarly)
+summ_gamma <- summ_grid %>%
+  dplyr::filter(model == "gamma") %>%
+  dplyr::mutate(
+    treatment = forcats::fct_relevel(
+      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
+    )
+  )  
+
+# Bias
+tab_gamma_bias <- summ_gamma %>%
+  dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    scenarios      = dplyr::n(),
+    mean_bias      = mean(bias, na.rm = TRUE),
+    median_bias    = median(bias, na.rm = TRUE),
+    mad_bias       = mad(bias, na.rm = TRUE),
+    mean_abs_bias  = mean(abs(bias), na.rm = TRUE),
+    .groups = "drop"
+  )
+
+gt_gamma_bias <- tab_gamma_bias %>%
+  dplyr::mutate(
+    mean_bias     = scales::number(mean_bias, accuracy = 0.0001),
+    median_bias   = scales::number(median_bias, accuracy = 0.0001),
+    mad_bias      = scales::number(mad_bias, accuracy = 0.0001),
+    mean_abs_bias = scales::number(mean_abs_bias, accuracy = 0.0001)
+  ) %>%
+  gt::gt() %>%
+  gt::tab_header(
+    title = "Gamma Interaction — Descriptive Statistics: Bias (All Scenarios)",
+    subtitle = "Negative = underestimation; Positive = overestimation"
+  ) %>%
+  gt::tab_options(data_row.padding = gt::px(1))
+gt_gamma_bias
+
+# Table: Descriptive statistics across ALL scenarios (collapse over n/prop/mag)
+tab_gamma_overall <- summ_gamma %>%
+  group_by(treatment) %>%
+  summarise(
+    scenarios = dplyr::n(),
+    mean_bias   = mean(bias, na.rm = TRUE),
+    median_bias = median(bias, na.rm = TRUE),
+    mad_bias    = mad(bias, na.rm = TRUE),
+    mean_abs_bias = mean(abs(bias), na.rm = TRUE),
+    mean_emp_se = mean(emp_se, na.rm = TRUE),
+    sd_emp_se   = sd(emp_se, na.rm = TRUE),
+    mean_cov    = mean(coverage, na.rm = TRUE),
+    p_cov_below_95 = mean(coverage < 0.95, na.rm = TRUE),   # share of scenarios under nominal
+    .groups = "drop"
+  )
+
+# Render nicely
+gt_gamma_overall <- tab_gamma_overall %>%
+  mutate(
+    mean_bias = scales::number(mean_bias, accuracy = 0.0001),
+    median_bias = scales::number(median_bias, accuracy = 0.0001),
+    mad_bias = scales::number(mad_bias, accuracy = 0.0001),
+    mean_abs_bias = scales::number(mean_abs_bias, accuracy = 0.0001),
+    mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001),
+    sd_emp_se = scales::number(sd_emp_se, accuracy = 0.0001),
+    mean_cov = scales::percent(mean_cov, accuracy = 0.1),
+    p_cov_below_95 = scales::percent(p_cov_below_95, accuracy = 0.1)
+  ) %>%
+  gt::gt() %>%
+  gt::tab_header(
+    title = "Gamma Interaction: Descriptive Statistics by Treatment (All Scenarios)",
+    subtitle = "Bias (<0 underestimates), empirical SE (MC SD), and coverage"
+  ) %>%
+  gt::tab_options(data_row.padding=px(1)) |> 
+  gt::fmt_markdown(columns = everything())
+
+gt_gamma_overall
+gtsave(gt_gamma_overall,here::here("results/tbl_gamma_overall.png"))
 ```
+
+
 
 
 #Publication-ready plots
 
-```{r}
+```{r eval=FALSE}
 # ---- 1) Gamma bias by treatment (scenario-level mean bias) ----
 gamma_grid <- all_df_gamma %>%
   group_by(treatment, n, prop_extreme, magnitude_level) %>%
