@@ -539,8 +539,9 @@ write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv"))
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
 
-```{r tidy_aov_type3}
-tidy_aov_type3 <- function(model) {
+```{r aov_type3_pes}
+
+aov_type3_pes <- function(formula, data) {
   # Needed packages
   if (!requireNamespace("car", quietly = TRUE)) {
     stop("Please install the 'car' package for Type III SS.")
@@ -548,53 +549,43 @@ tidy_aov_type3 <- function(model) {
   if (!requireNamespace("dplyr", quietly = TRUE)) {
     stop("Please install the 'dplyr' package.")
   }
-
+  
+  # Fit the model
+  model <- aov(formula, data = data)
+  
   # Type III ANOVA table
   a3 <- car::Anova(model, type = 3)
-
   # Convert to data frame
   tab <- as.data.frame(a3)
   tab$term <- rownames(tab)
   rownames(tab) <- NULL
-
-  # Ensure standard column names
-  # car::Anova usually gives: "Sum Sq", "Df", "F value", "Pr(>F)"
   # Compute Mean Sq
   tab$`Mean Sq` <- tab$`Sum Sq` / tab$Df
-
-  # Identify residual/error row (often "Residuals" or "(Residuals)")
+  # Identify residual/error row
   error_row <- grepl("Residual", tab$term, ignore.case = TRUE)
   ss_error  <- tab$`Sum Sq`[error_row]
-
-  # Compute partial eta squared: SS_effect / (SS_effect + SS_error)
+  # Compute partial eta squared
   tab$pes <- ifelse(
     !error_row,
     tab$`Sum Sq` / (tab$`Sum Sq` + ss_error),
     NA_real_
   )
-
   # Apply rounding rules
   tab_out <- tab |>
     dplyr::mutate(
       `Sum Sq`  = round(`Sum Sq`, 2),
       `Mean Sq` = round(`Mean Sq`, 2),
       `F value` = ifelse(!is.na(`F value`), round(`F value`, 2), NA_real_),
-
-      # p-values: 3 decimals with <.001 rule
       `Pr(>F)` = dplyr::case_when(
         is.na(`Pr(>F)`) ~ NA_character_,
         `Pr(>F)` < 0.001 ~ "<.001",
         TRUE ~ sprintf("%.3f", round(`Pr(>F)`, 3))
       ),
-
-      # partial eta squared: 3 decimals
       pes = ifelse(!is.na(pes), round(pes, 3), NA_real_)
     ) |>
     dplyr::select(term, Df, `Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`, pes)
-
   tab_out
 }
-
 
 ```
 
@@ -632,14 +623,18 @@ saveRDS(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".RD
 write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".csv")), row.names = FALSE)
 
 # A) factorial ANOVA on gamma bias (rep-level)
+aov_bias <- aov_type3_pes(
+  bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma,
+  data = all_df_gamma
+)
 aov_gamma_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
 summary(aov_gamma_bias)
 
-tidy_aov_bias_t3 <- tidy_aov_type3(aov_gamma_bias)
+aov_bias_t3 <- tidy_aov_type3(aov_gamma_bias)
 
 write.csv(
-  tidy_aov_bias_t3,
-  here::here(paste0("results/tidy_aov_bias_t3_", dt, ".csv")))
+  aov_bias_t3,
+  here::here(paste0("results/aov_bias_t3_", dt, ".csv")))
 
 #eta_squared(aov_gamma_bias, partial=TRUE) # for partial eta squared (or general?)
 
@@ -647,8 +642,8 @@ write.csv(
 summ_grid_gamma <- summ_grid |> filter(model=="gamma")
 aov_gamma_emp_se <- aov(
 	emp_se ~ treatment * n * prop_extreme * magnitude_level, data = summ_grid_gamma )
-summary(aov_gamma_emp_se) 
-eta_squared(aov_gamma_emp_se, partial=TRUE) # for partial eta squared (or general?)
+
+eta_squared(aov_gamma_emp_se, partial=TRUE, type=3) # for partial eta squared (or general?)
 
 tidy_aov_empse_t3 <- tidy_aov_type3(aov_gamma_emp_se)
 
