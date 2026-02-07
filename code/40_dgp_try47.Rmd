@@ -22,6 +22,7 @@ pacman::p_load(
   ggrepel,
   glue,
   gt,
+  gtsummary,
   here,
   lubridate,
   MASS,
@@ -311,8 +312,9 @@ compute_true_ATT <- function(dat, COEF) {
 - adds ATT effect size (d_est, d_true, d_bias) using baseline SD
 
 ```{r run_one}
-run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
-                    es_ref = "control_pre") {
+run_one <- function(
+    n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
+    es_ref = "control_pre") {
 
   dat <- simulate_panel_data(
     n = n,
@@ -368,11 +370,14 @@ run_one <- function(n, magnitude_level, prop_extreme, gamma_shape, treatment, CO
   )
 }
 
-run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
-                   es_ref = "control_pre") {
+run_mc <- function(
+    B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF,
+    es_ref = "control_pre") {
   results <- replicate(
     B,
-    run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF, es_ref = es_ref),
+    run_one(
+      n, magnitude_level, prop_extreme, gamma_shape, treatment, 
+      COEF, es_ref = es_ref),
     simplify = FALSE
   )
   bind_rows(results)
@@ -381,15 +386,57 @@ run_mc <- function(B, n, magnitude_level, prop_extreme, gamma_shape, treatment, 
 ```
 
 #Step 1: Representative dataset (histograms + model fits)
-```{r}
+```{r dat_example}
 set.seed(123)
 dat_example <- simulate_panel_data(
-  n = 1000,
+  n = 2500, # actually 5k
   magnitude_level = 1,
-  prop_extreme = 0.05,
+  prop_extreme = 0.01,
   gamma_shape = 3,
   COEF = COEF
 )
+
+# Descriptives, Table One 
+# Helper for quantiles
+q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+
+tab_y_example <- dat_example %>%
+  # dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    nobs        = dplyr::n(),
+    mean        = mean(TOTEXPYY, na.rm = TRUE),
+    sd          = sd(TOTEXPYY, na.rm = TRUE),
+    median      = median(TOTEXPYY, na.rm = TRUE),
+    mad         = mad(TOTEXPYY, na.rm = TRUE),
+    min         = min(TOTEXPYY, na.rm = TRUE),
+    q1          = q_fun(TOTEXPYY, 0.25),
+    q3          = q_fun(TOTEXPYY, 0.75),
+    iqr         = q3 - q1,
+    max         = max(TOTEXPYY, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+dat_example |> 
+	select(
+		TOTEXPYY,
+		ind_post,
+		ind_tx,
+		ind_gt0,
+		zPCS,
+		HISPANX,
+		ind_female
+		) |> 
+	gtsummary::tbl_summary(
+		by=ind_tx,
+		type = list(
+			#AGELAST ~ "continuous",
+			ind_female ~ "categorical",
+			ind_gt0 ~ "categorical",
+			ind_post ~ "categorical"),
+		statistic = list(all_continuous() ~ "{mean} ({sd})")
+		) |> 
+	# add_p() |> 
+	gtsummary::add_overall()
 
 p1 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
   geom_histogram(bins = 100, fill = "skyblue", color = "black") +
@@ -419,7 +466,10 @@ summary(fit_gamma)
 
 #Step 2: Full Monte Carlo across scenarios
 ```{r full_mc}
-n_vals <- c(5000, 10000, 20000)
+
+# Don't forget n_vals are double - so putting in 2500 will give 5000 obs
+# 2500 = 5000 obs, 5000 obs=10000, 10000=20000
+n_vals <- c(2500, 5000, 10000) 
 prop_extreme_vals <- c(0.01, 0.05, 0.10)
 magnitude_vals <- c(1, 2, 3)
 treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj", "truncate")
@@ -488,6 +538,66 @@ write.csv(summ_grid, file = here::here(paste0("results/summ_grid_", dt, ".csv"))
 
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
+
+```{r tidy_aov_type3}
+tidy_aov_type3 <- function(model) {
+  # Needed packages
+  if (!requireNamespace("car", quietly = TRUE)) {
+    stop("Please install the 'car' package for Type III SS.")
+  }
+  if (!requireNamespace("dplyr", quietly = TRUE)) {
+    stop("Please install the 'dplyr' package.")
+  }
+
+  # Type III ANOVA table
+  a3 <- car::Anova(model, type = 3)
+
+  # Convert to data frame
+  tab <- as.data.frame(a3)
+  tab$term <- rownames(tab)
+  rownames(tab) <- NULL
+
+  # Ensure standard column names
+  # car::Anova usually gives: "Sum Sq", "Df", "F value", "Pr(>F)"
+  # Compute Mean Sq
+  tab$`Mean Sq` <- tab$`Sum Sq` / tab$Df
+
+  # Identify residual/error row (often "Residuals" or "(Residuals)")
+  error_row <- grepl("Residual", tab$term, ignore.case = TRUE)
+  ss_error  <- tab$`Sum Sq`[error_row]
+
+  # Compute partial eta squared: SS_effect / (SS_effect + SS_error)
+  tab$pes <- ifelse(
+    !error_row,
+    tab$`Sum Sq` / (tab$`Sum Sq` + ss_error),
+    NA_real_
+  )
+
+  # Apply rounding rules
+  tab_out <- tab |>
+    dplyr::mutate(
+      `Sum Sq`  = round(`Sum Sq`, 2),
+      `Mean Sq` = round(`Mean Sq`, 2),
+      `F value` = ifelse(!is.na(`F value`), round(`F value`, 2), NA_real_),
+
+      # p-values: 3 decimals with <.001 rule
+      `Pr(>F)` = dplyr::case_when(
+        is.na(`Pr(>F)`) ~ NA_character_,
+        `Pr(>F)` < 0.001 ~ "<.001",
+        TRUE ~ sprintf("%.3f", round(`Pr(>F)`, 3))
+      ),
+
+      # partial eta squared: 3 decimals
+      pes = ifelse(!is.na(pes), round(pes, 3), NA_real_)
+    ) |>
+    dplyr::select(term, Df, `Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`, pes)
+
+  tab_out
+}
+
+
+```
+
 ```{r}
 # ---- Gamma (Part 2 interaction): bias, SE, coverage ----
 # all_df_gamma <- all_df %>%
@@ -524,13 +634,14 @@ write.csv(all_df_gamma, file = here::here(paste0("results/all_df_gamma_", dt, ".
 # A) factorial ANOVA on gamma bias (rep-level)
 aov_gamma_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, data = all_df_gamma)
 summary(aov_gamma_bias)
-aov_gamma_bias_df <- as.data.frame(summary(aov_gamma_bias)[[1]])
-tidy_aov <- tidy(aov_gamma_bias)
-write.csv(
-  tidy_aov,
-  here::here(paste0("results/aov_gamma_bias_", dt, ".csv")))
 
-eta_squared(aov_gamma_bias, partial=TRUE) # for partial eta squared (or general?)
+tidy_aov_bias_t3 <- tidy_aov_type3(aov_gamma_bias)
+
+write.csv(
+  tidy_aov_bias_t3,
+  here::here(paste0("results/tidy_aov_bias_t3_", dt, ".csv")))
+
+#eta_squared(aov_gamma_bias, partial=TRUE) # for partial eta squared (or general?)
 
 # B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
 summ_grid_gamma <- summ_grid |> filter(model=="gamma")
@@ -538,6 +649,12 @@ aov_gamma_emp_se <- aov(
 	emp_se ~ treatment * n * prop_extreme * magnitude_level, data = summ_grid_gamma )
 summary(aov_gamma_emp_se) 
 eta_squared(aov_gamma_emp_se, partial=TRUE) # for partial eta squared (or general?)
+
+tidy_aov_empse_t3 <- tidy_aov_type3(aov_gamma_emp_se)
+
+write.csv(
+  tidy_aov_empse_t3,
+  here::here(paste0("results/tidy_aov_empse_t3_", dt, ".csv")))
 
 # C) coverage: scenario-level proportion (recommended)
 # cov_grid <- all_df_gamma %>%
