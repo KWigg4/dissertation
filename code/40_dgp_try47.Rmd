@@ -36,6 +36,11 @@ dt <- lubridate::today()
 dir.create("results", showWarnings = FALSE)
 dir.create("figures", showWarnings = FALSE)
 
+conflicted::conflicts_prefer(
+  dplyr::select(),
+  dplyr::filter()
+)
+
 # Save csv and RDS to results directory
 fn_save_results <- function(df) {
   name <- deparse(substitute(df))
@@ -545,67 +550,9 @@ print(summ_grid)
 fn_save_results(summ_grid)
 
 ```  
-######  IF CLEAN IN 41_results.Rmd, remove below this line #################
 
 
-##4 FULL-FACTORIAL ANOVA (RQ answers)
-
-```{r fn_aov_type3}
-aov_type3_pes <- function(formula, data) {
-  # Needed packages
-  if (!requireNamespace("car", quietly = TRUE)) {
-    stop("Please install the 'car' package for Type III SS.")
-  }
-  if (!requireNamespace("dplyr", quietly = TRUE)) {
-    stop("Please install the 'dplyr' package.")
-  }
-  
-  # Fit the model
-  model <- aov(formula, data = data)
-  
-  # Type III ANOVA table
-  a3 <- car::Anova(model, type = 3)
-  # Convert to data frame
-  tab <- as.data.frame(a3)
-  tab$term <- rownames(tab)
-  rownames(tab) <- NULL
-  # Compute Mean Sq
-  tab$`Mean Sq` <- tab$`Sum Sq` / tab$Df
-  # Identify residual/error row
-  error_row <- grepl("Residual", tab$term, ignore.case = TRUE)
-  ss_error  <- tab$`Sum Sq`[error_row]
-  # Compute partial eta squared
-  tab$pes <- ifelse(
-    !error_row,
-    tab$`Sum Sq` / (tab$`Sum Sq` + ss_error),
-    NA_real_
-  )
-  # Apply rounding rules
-  tab_out <- tab |>
-    dplyr::mutate(
-      `Sum Sq`  = round(`Sum Sq`, 2),
-      `Mean Sq` = round(`Mean Sq`, 2),
-      `F value` = ifelse(!is.na(`F value`), round(`F value`, 2), NA_real_),
-      `Pr(>F)` = dplyr::case_when(
-        is.na(`Pr(>F)`) ~ NA_character_,
-        round(`Pr(>F)`, 3) < 0.001 ~ "<.001",
-        TRUE ~ sprintf("%.3f", round(`Pr(>F)`, 3))
-      ),
-      # partial eta squared: 3 decimals with <.001 rule
-      pes = dplyr::case_when(
-        is.na(pes) ~ NA_character_,
-        round(pes, 3) < 0.001 & pes > 0 ~ "<.001",
-        TRUE ~ sprintf("%.3f", round(pes, 3))
-      )
-    ) |>
-    dplyr::select(term, Df, `Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`, pes)
-  tab_out
-}
-
-
-```
-
-```{r}
+```{r gamma_sim_summ}
 # ---- Gamma (Part 2 interaction): bias, SE, coverage ----
 # all_df_gamma <- all_df %>%
 #   dplyr::filter(model == "gamma") %>%
@@ -618,31 +565,33 @@ aov_type3_pes <- function(formula, data) {
 #                        as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se)))
 #   )
 
-cov_fail <- all_df |> filter(model == "gamma", is.na(est) | is.na(se) | is.na(true))
-
 # --- Build replicate-level coverage indicator for the Gamma model ---
 all_df_gamma_w_fails <- all_df %>%
-  # I keep forgetting it's *2 for total observations, make this to remember
-  mutate(nobs = n*2) |> 
   # remove the ones for ATT: 
-  select(-c(d_est, d_true, d_bias)) |> 
-  # get nobs by n: 
-  relocate(nobs, .after=n) |> 
+  dplyr::select(-c(d_est, d_true, d_bias))  %>% 
   dplyr::filter(model == "gamma") %>%
+  # I keep forgetting it's *2 for total observations, make this to remember
+  mutate(nobs = n*2)  %>%
+  relocate(nobs, .after=n) |> 
   dplyr::mutate(
     cover_ind = dplyr::if_else(
-      # is.na(est) | is.na(se) | is.na(true),
-      # KW re ^^ did he mean bias??
-      is.na(est) | is.na(se) | is.na(bias),
+      is.na(est) | is.na(se),
       NA_real_,
       as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se))
-    ),
+      ),
     # ensure factors for ANOVA
     n = as.factor(n),
     prop_extreme = as.factor(prop_extreme),
     magnitude_level = as.factor(magnitude_level),
-    treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate")
-  ) 
+    treatment = forcats::fct_relevel(
+      treatment, "raw","topcode","mean_adj","median_adj","truncate") 
+  )
+
+# Used for modeling: 
+all_df_gamma <- all_df_gamma_w_fails |> 
+  dplyr::filter(!is.na(cover_ind))
+
+fn_save_results(all_df_gamma)
 
 # Inspect where cover_ind failed:
 all_df_gamma_fails <- all_df_gamma_w_fails |> 
@@ -665,62 +614,11 @@ summ_gamma <- summ_grid %>%
   )  |> 
   relocate(nobs, .after=n)
 
+fn_save_results(summ_gamma)
 
-# Used for modeling: 
-all_df_gamma <- all_df_gamma_w_fails |> 
-  dplyr::filter(!is.na(cover_ind))
+```  
 
-fn_save_results(all_df_gamma)
-
-# A) factorial ANOVA on gamma bias (rep-level)
-aov_bias_t3_pes <- aov_type3_pes(
-  bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_gamma
-)
-
-fn_save_results(aov_bias_t3_pes)
-
-
-# B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
-
-fn_save_results(summ_grid_gamma)
-
-aov_empse_t3_pes <- aov_type3_pes(
-  emp_se ~ treatment * n * prop_extreme * magnitude_level, 
-  data = summ_grid_gamma )
-
-fn_save_results(aov_empse_t3_pes)
-
-# C) coverage: scenario-level proportion (recommended)
-cov_grid <- all_df_gamma %>%
-  group_by(treatment, n, prop_extreme, magnitude_level) %>%
-  summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
-
-fn_save_results(cov_grid)
-
-## Ask about this
-aov_cov_scenario <- aov_type3_pes(
-  coverage ~ treatment * n * prop_extreme * magnitude_level, 
-  data = cov_grid
-)
-
-aov_gamma_cov <- aov(coverage ~ treatment * n * prop_extreme * magnitude_level, data = cov_grid)
-aov_gamma_cov_t3 <- car::Anova(aov_gamma_cov, type = 3)
-# summary(aov_gamma_cov)
-# eta_squared(aov_gamma_cov, partial=TRUE) 
-
-## ^^ effect size won't run because only one row per. Need to re-do: 
-
-
-# --- Full factorial at replicate level now has residual df (many reps per cell) ---
-aov_cov_t3_pes <- aov_type3_pes(
-  cover_ind ~ treatment * n * prop_extreme * magnitude_level,
-  data = all_df_gamma
-  )
-
-fn_save_results(aov_cov_t3_pes)
-
-
+```{r all_df_att}
 # ---- ATT (RQ4): ATT_hat, ATT_bias, and effect size across treatments ----
 all_df_att <- all_df %>%
   dplyr::filter(model == "ATT") %>%
@@ -730,39 +628,14 @@ all_df_att <- all_df %>%
     magnitude_level = factor(magnitude_level),
     treatment = factor(treatment)
   )
-
-# ATT_hat across conditions (ignore the pes part)
-aov_att_hat_t3 <- aov_type3_pes(
-  est ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_att
-)
-fn_save_results(aov_att_hat_t3)
-
-# ATT_bias across conditions (recommended DV)
-aov_att_bias_t3 <- aov_type3_pes(
-  bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_att
-)
-fn_save_results(aov_att_bias_t3)
-
-
-# # Effect size (d_est) across conditions (optional but usually helpful)
-# aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
-# summary(aov_att_d)
-
-# Save ANOVA-ready datasets
 fn_save_results(all_df_att)
-fn_save_results(cov_grid)
+```
 
-```  
+
 
 
 ```{r descr}
 # Focus on the Gamma Part-2 interaction (can switch to "ATT" later)
-
-
-fn_save_results(summ_grid)
-fn_save_results(summ_grid_gamma)
 
 # ---- Bias (overall) ----
 # mean_bias is average SIGNED bias; preserves direction of estimator's errors, where neg is systematic underestimation and positive is systematic overestimation and opposing signs are going to cancel each other out. 
@@ -1361,6 +1234,138 @@ sentences <- tab_consistency %>%
 
 cat(paste0("- ", sentences, collapse = "\n"))
 ```  
+
+##4 FULL-FACTORIAL ANOVA (RQ answers)
+
+```{r fn_aov_type3}
+aov_type3_pes <- function(formula, data) {
+  # Needed packages
+  if (!requireNamespace("car", quietly = TRUE)) {
+    stop("Please install the 'car' package for Type III SS.")
+  }
+  if (!requireNamespace("dplyr", quietly = TRUE)) {
+    stop("Please install the 'dplyr' package.")
+  }
+  
+  # Fit the model
+  model <- aov(formula, data = data)
+  
+  # Type III ANOVA table
+  a3 <- car::Anova(model, type = 3)
+  # Convert to data frame
+  tab <- as.data.frame(a3)
+  tab$term <- rownames(tab)
+  rownames(tab) <- NULL
+  # Compute Mean Sq
+  tab$`Mean Sq` <- tab$`Sum Sq` / tab$Df
+  # Identify residual/error row
+  error_row <- grepl("Residual", tab$term, ignore.case = TRUE)
+  ss_error  <- tab$`Sum Sq`[error_row]
+  # Compute partial eta squared
+  tab$pes <- ifelse(
+    !error_row,
+    tab$`Sum Sq` / (tab$`Sum Sq` + ss_error),
+    NA_real_
+  )
+  # Apply rounding rules
+  tab_out <- tab |>
+    dplyr::mutate(
+      `Sum Sq`  = round(`Sum Sq`, 2),
+      `Mean Sq` = round(`Mean Sq`, 2),
+      `F value` = ifelse(!is.na(`F value`), round(`F value`, 2), NA_real_),
+      `Pr(>F)` = dplyr::case_when(
+        is.na(`Pr(>F)`) ~ NA_character_,
+        round(`Pr(>F)`, 3) < 0.001 ~ "<.001",
+        TRUE ~ sprintf("%.3f", round(`Pr(>F)`, 3))
+      ),
+      # partial eta squared: 3 decimals with <.001 rule
+      pes = dplyr::case_when(
+        is.na(pes) ~ NA_character_,
+        round(pes, 3) < 0.001 & pes > 0 ~ "<.001",
+        TRUE ~ sprintf("%.3f", round(pes, 3))
+      )
+    ) |>
+    dplyr::select(term, Df, `Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`, pes)
+  tab_out
+}
+
+```  
+
+
+
+
+```{r}
+
+
+# A) factorial ANOVA on gamma bias (rep-level)
+aov_bias_t3_pes <- aov_type3_pes(
+  bias ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_gamma
+)
+
+fn_save_results(aov_bias_t3_pes)
+
+
+# B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
+aov_empse_t3_pes <- aov_type3_pes(
+  emp_se ~ treatment * n * prop_extreme * magnitude_level, 
+  data = summ_grid_gamma )
+
+fn_save_results(aov_empse_t3_pes)
+
+# C) coverage: scenario-level proportion (recommended)
+cov_grid <- all_df_gamma %>%
+  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
+
+fn_save_results(cov_grid)
+
+## Ask about this
+aov_cov_scenario <- aov_type3_pes(
+  coverage ~ treatment * n * prop_extreme * magnitude_level, 
+  data = cov_grid
+)
+
+aov_gamma_cov <- aov(
+  coverage ~ treatment * n * prop_extreme * magnitude_level, data = cov_grid)
+aov_gamma_cov_t3 <- car::Anova(aov_gamma_cov, type = 3)
+# summary(aov_gamma_cov)
+# eta_squared(aov_gamma_cov, partial=TRUE) 
+
+## ^^ effect size won't run because only one row per. Need to re-do: 
+
+
+# --- Full factorial at replicate level now has residual df (many reps per cell) ---
+aov_cov_t3_pes <- aov_type3_pes(
+  cover_ind ~ treatment * n * prop_extreme * magnitude_level,
+  data = all_df_gamma
+  )
+
+fn_save_results(aov_cov_t3_pes)
+
+
+# ATT_hat across conditions (ignore the pes part)
+aov_att_hat_t3 <- aov_type3_pes(
+  est ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_att
+)
+fn_save_results(aov_att_hat_t3)
+
+# ATT_bias across conditions (recommended DV)
+aov_att_bias_t3 <- aov_type3_pes(
+  bias ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_att
+)
+fn_save_results(aov_att_bias_t3)
+
+
+# # Effect size (d_est) across conditions (optional but usually helpful)
+# aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
+# summary(aov_att_d)
+
+
+```  
+
 ## ANOVA effect-size reporting for eta-squared with p-values    
 
 Reusable helper to extract eta-squared and p-values from an aov object  
