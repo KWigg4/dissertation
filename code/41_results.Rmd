@@ -195,7 +195,10 @@ gt_empse_full_overall <- tab_empse_full_overall %>%
   ) %>%
   gt::tab_options(data_row.padding = gt::px(1))
 
-gt_empse_full_overall
+gt_empse_full_overall |> 
+  gtsave(
+    here::here("results/tbl_empse_descr.rtf")
+  )
 
 # ---- Coverage (overall) ----
 tab_gamma_cov_overall <- summ_gamma %>%
@@ -426,6 +429,37 @@ gt::gtsave(
     here::here("results/tbl_over_under_tx.rtf")
 )
 ```    
+
+```{r bias_by_scen}
+scenario_summary <- under_over_scen |>
+  group_by(nobs, prop_extreme, magnitude_level) |>
+  summarise(
+    n_treatments = n(),   # should equal number of treatments
+
+    # counts of treatments that under/over
+    n_treat_under = sum(under_rate > 0.5, na.rm = TRUE),
+    n_treat_over  = sum(over_rate  > 0.5, na.rm = TRUE),
+
+    # counts of treatments with majority under/over
+    n_treat_under_majority = sum(under_majority, na.rm = TRUE),
+    n_treat_over_majority  = sum(over_majority,  na.rm = TRUE),
+
+    # proportions (denominator = number of treatments)
+    prop_treat_under = n_treat_under / n_treatments,
+    prop_treat_over  = n_treat_over  / n_treatments,
+    prop_treat_under_majority = n_treat_under_majority / n_treatments,
+
+    .groups = "drop"
+  )
+
+scenario_summary |> 
+  gt() |> 
+  gtsave(
+    here::here("results/tbl_over_under_scen_summary.rtf")
+  )
+
+```
+
 
 
 ## Plots  
