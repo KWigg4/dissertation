@@ -281,7 +281,46 @@ make_gt_table <- function(df, title, subtitle) {
     gt::tab_options(data_row.padding = gt::px(1))
 }
 
+num4 <- function(x) scales::number(x, accuracy = 0.0001)
 
+
+tab_bias_stratified <- all_df_gamma %>%
+  dplyr::group_by(treatment, prop_extreme, nobs, magnitude_level) %>%
+  dplyr::summarise(
+    scenarios      = dplyr::n(),
+    mean_bias      = mean(bias, na.rm = TRUE),
+    median_bias    = median(bias, na.rm = TRUE),
+    mad_bias       = mad(bias, na.rm = TRUE),
+    mean_abs_bias  = mean(abs(bias), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    mean_bias     = num4(mean_bias),
+    median_bias   = num4(median_bias),
+    mad_bias      = num4(mad_bias),
+    mean_abs_bias = num4(mean_abs_bias)
+  )
+
+bias_tables_by_treatment <- tab_bias_stratified %>%
+  dplyr::group_split(treatment)
+
+gt_bias_by_treatment <- lapply(bias_tables_by_treatment, function(df) {
+  trt <- df$treatment[1]
+
+  make_gt_table(
+    df %>% dplyr::select(-treatment),
+    title = glue::glue("Gamma Interaction — Bias (All Scenarios)"),
+    subtitle = glue::glue("Treatment = {trt}")
+  )
+})
+
+for (i in seq_along(gt_bias_by_treatment)) { 
+  trt <- unique(bias_tables_by_treatment[[i]]$treatment) 
+  
+  gt::gtsave( 
+    gt_bias_by_treatment[[i]], 
+    filename = here::here(paste0("results/tbl_bias_treatment_", trt, "_", dt, ".rtf"))
+    ) }
 
 ```  
 
@@ -289,14 +328,34 @@ make_gt_table <- function(df, title, subtitle) {
 
 ```{r over_underests}
 # Replicate-level indicator of underestimation for gamma model
-under_over_scen <- all_df %>%
-  dplyr::filter(model == "gamma") %>%
-  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+under_over_scen <- all_df_gamma %>%
+  group_by(treatment, nobs, prop_extreme, magnitude_level) %>%
   summarise(
     under_rate = mean(est < true, na.rm = TRUE),
     over_rate  = mean(est > true, na.rm = TRUE),
+    n_design=n(),
     .groups = "drop"
-  )
+  ) |> 
+  mutate(
+    pct_under = scales::percent(under_rate, accuracy = 0.1),
+    pct_over = scales::percent(over_rate, accuracy = 0.1)
+  ) |> 
+  ungroup() |> 
+  mutate(
+    treatment = factor(
+      treatment,
+      levels = c("raw","topcode","mean_adj","median_adj","truncate"),
+      labels = c("Raw","Top-coding", "Mean-preserved top-coding", "Median-preserved top-coding","Truncation"))
+    ) |> 
+  select(treatment, n_design, nobs, prop_extreme, magnitude_level, pct_under, pct_over)
+
+under_over_scen |> 
+  arrange(nobs, prop_extreme, magnitude_level, treatment) |> 
+  
+  gt() |> 
+  gt::gtsave(
+    here::here("results/tbl_over_under_scen.rtf")
+)
 
 # Scenario-level merge with empirical SE and coverage
 scenario_stats <- summ_gamma %>%
@@ -313,7 +372,8 @@ tab_consistency <- scenario_stats %>%
   group_by(treatment) %>%
   summarise(
     n_scen = dplyr::n(),
-    share_scen_under = mean(bias < 0, na.rm = TRUE),    # % scenarios with negative mean bias
+    share_scen_under = mean(bias < 0, na.rm = TRUE),  
+    # % scenarios with negative mean bias
     share_scen_over  = mean(bias > 0, na.rm = TRUE),
     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
     mean_cov = mean(coverage, na.rm = TRUE),
