@@ -91,7 +91,7 @@ tab_bias_descr <- summ_gamma %>%
     .groups = "drop"
   )
 
-gt_bias_full_overall <- tab_bias_full_overall %>%
+gt_bias_descr <- tab_bias_descr %>%
   dplyr::mutate(
     dplyr::across(
       c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, q3_bias, iqr_bias, max_bias, mean_abs_bias),
@@ -121,6 +121,8 @@ gt_bias_full_overall <- tab_bias_full_overall %>%
     share_bias_pos = "Share bias > 0"
   ) %>%
   gt::tab_options(data_row.padding = gt::px(1))
+
+gtsave(gt_bias_descr, here::here("results/tbl_bias_descr.rtf"))
 
 gt_bias_full_overall
 
@@ -279,121 +281,7 @@ make_gt_table <- function(df, title, subtitle) {
     gt::tab_options(data_row.padding = gt::px(1))
 }
 
-# Split by scenario factors
-split_keys <- c("prop_extreme", "n", "magnitude_level")
-gamma_groups <- summ_gamma %>% dplyr::group_by(across(all_of(split_keys))) %>% dplyr::group_split()
 
-gt_bias_list <- lapply(gamma_groups, function(g) {
-  hdr <- g %>% dplyr::slice(1) %>% dplyr::select(all_of(split_keys))
-  sub_lab <- glue::glue("prop_extreme = {hdr$prop_extreme}, n = {hdr$n}, magnitude_level = {hdr$magnitude_level}")
-
-  tab <- g %>%
-    dplyr::group_by(treatment) %>%
-    dplyr::summarise(
-      scenarios      = dplyr::n(),
-      mean_bias      = mean(bias, na.rm = TRUE),
-      median_bias    = median(bias, na.rm = TRUE),
-      mad_bias       = mad(bias, na.rm = TRUE),
-      mean_abs_bias  = mean(abs(bias), na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::mutate(
-      mean_bias     = num4(mean_bias),
-      median_bias   = num4(median_bias),
-      mad_bias      = num4(mad_bias),
-      mean_abs_bias = num4(mean_abs_bias)
-    )
-
-  make_gt_table(
-    tab,
-    title = glue::glue("Gamma Interaction — Bias (Stratified)"),
-    subtitle = sub_lab
-  )
-})
-
-gt_empse_list <- lapply(gamma_groups, function(g) {
-  hdr <- g %>% dplyr::slice(1) %>% dplyr::select(all_of(split_keys))
-  sub_lab <- glue::glue("prop_extreme = {hdr$prop_extreme}, n = {hdr$n}, magnitude_level = {hdr$magnitude_level}")
-
-  tab <- g %>%
-    dplyr::group_by(treatment) %>%
-    dplyr::summarise(
-      scenarios   = dplyr::n(),
-      mean_emp_se = mean(emp_se, na.rm = TRUE),
-      sd_emp_se   = sd(emp_se, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::mutate(
-      mean_emp_se = num4(mean_emp_se),
-      sd_emp_se   = num4(sd_emp_se)
-    )
-
-  make_gt_table(
-    tab,
-    title = glue::glue("Gamma Interaction — Empirical SE (Stratified)"),
-    subtitle = sub_lab
-  )
-})
-
-gt_cov_list <- lapply(gamma_groups, function(g) {
-  hdr <- g %>% dplyr::slice(1) %>% dplyr::select(all_of(split_keys))
-  sub_lab <- glue::glue("prop_extreme = {hdr$prop_extreme}, n = {hdr$n}, magnitude_level = {hdr$magnitude_level}")
-
-  tab <- g %>%
-    dplyr::group_by(treatment) %>%
-    dplyr::summarise(
-      scenarios       = dplyr::n(),
-      mean_cov        = mean(coverage, na.rm = TRUE),
-      p_cov_below_95  = mean(coverage < 0.95, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::mutate(
-      mean_cov       = scales::percent(mean_cov, accuracy = 0.1),
-      p_cov_below_95 = scales::percent(p_cov_below_95, accuracy = 0.1)
-    )
-
-  make_gt_table(
-    tab,
-    title = glue::glue("Gamma Interaction — Coverage (Stratified)"),
-    subtitle = sub_lab
-  )
-})
-
-# Save all stratified tables for appendix
-# Ensure output directory exists (you already create "figures" earlier)
-if (!dir.exists("figures")) dir.create("figures", showWarnings = FALSE)
-
-# Helper to extract key labels for filenames
-label_from_group <- function(g) {
-  hdr <- g %>% dplyr::slice(1) %>% dplyr::select(all_of(split_keys))
-  paste0("prop", hdr$prop_extreme, "_n", hdr$n, "_mag", hdr$magnitude_level)
-}
-
-# Save Bias tables
-for (i in seq_along(gt_bias_list)) {
-  lab <- label_from_group(gamma_groups[[i]])
-  gt::gtsave(gt_bias_list[[i]],
-             filename = here::here(paste0("figures/table_bias_", lab, "_", dt, ".png")),
-             expand = 0)
-}
-
-# Save Empirical SE tables
-for (i in seq_along(gt_empse_list)) {
-  lab <- label_from_group(gamma_groups[[i]])
-  gt::gtsave(gt_empse_list[[i]],
-             filename = here::here(paste0("figures/table_empse_", lab, "_", dt, ".png")),
-             expand = 0)
-}
-
-# Save Coverage tables
-for (i in seq_along(gt_cov_list)) {
-  lab <- label_from_group(gamma_groups[[i]])
-  gt::gtsave(gt_cov_list[[i]],
-             filename = here::here(paste0("figures/table_cov_", lab, "_", dt, ".png")),
-             expand = 0)
-}
-
-## ATT version: For the same stratified tables for ATT (and/or d_est),  replace summ_gamma with summ_att <- summ_grid |> dplyr::filter(model == "ATT") and reuse the same blocks. All required fields were computed earlier in pipeline.
 
 ```  
 
@@ -410,7 +298,7 @@ under_over_scen <- all_df %>%
     .groups = "drop"
   )
 
-# Scenario-level merge with your empirical SE and coverage
+# Scenario-level merge with empirical SE and coverage
 scenario_stats <- summ_gamma %>%
   left_join(under_over_scen,
             by = c("treatment", "n", "prop_extreme", "magnitude_level")) %>%
@@ -425,9 +313,6 @@ tab_consistency <- scenario_stats %>%
   group_by(treatment) %>%
   summarise(
     n_scen = dplyr::n(),
-    # scenario-mean bias (your 'bias' already is scenario-level mean bias)
-    avg_mean_bias = mean(bias, na.rm = TRUE),
-    med_mean_bias = median(bias, na.rm = TRUE),
     share_scen_under = mean(bias < 0, na.rm = TRUE),    # % scenarios with negative mean bias
     share_scen_over  = mean(bias > 0, na.rm = TRUE),
     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
