@@ -94,7 +94,8 @@ tab_bias_descr <- summ_gamma %>%
 gt_bias_descr <- tab_bias_descr %>%
   dplyr::mutate(
     dplyr::across(
-      c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, q3_bias, iqr_bias, max_bias, mean_abs_bias),
+      c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, 
+        q3_bias, iqr_bias, max_bias, mean_abs_bias),
       ~ scales::number(.x, accuracy = 0.0001)
     ),
     share_bias_neg = scales::percent(share_bias_neg, accuracy = 0.1),
@@ -331,6 +332,8 @@ for (i in seq_along(gt_bias_by_treatment)) {
 under_over_scen <- all_df_gamma %>%
   group_by(treatment, nobs, prop_extreme, magnitude_level) %>%
   summarise(
+    n_under = sum(est < true, na.rm = TRUE), # count of underestimates 
+    n_over = sum(est > true, na.rm = TRUE),
     under_rate = mean(est < true, na.rm = TRUE),
     over_rate  = mean(est > true, na.rm = TRUE),
     n_design=n(),
@@ -341,7 +344,7 @@ under_over_scen <- all_df_gamma %>%
     pct_over = scales::percent(over_rate, accuracy = 0.1)
   ) |> 
   ungroup() |> 
-  select(treatment, n_design, nobs, prop_extreme, magnitude_level, pct_under, pct_over, under_rate, over_rate) |> 
+  select(treatment, n_design, nobs, prop_extreme, magnitude_level, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
   mutate(
      # 'consistently under' if majority of reps are < 0 bias in that scenario
     under_majority = under_rate > 0.5,
@@ -354,7 +357,7 @@ under_over_scen <- all_df_gamma %>%
   )
 
 under_over_scen |> 
-  arrange(nobs, pct_extreme, magnitude_level, treatment) |> 
+  arrange(nobs, prop_extreme, magnitude_level, treatment) |> 
   mutate(
     treatment = factor(
       treatment,
@@ -367,13 +370,6 @@ under_over_scen |>
     here::here("results/tbl_over_under_scen.rtf")
 )
 
-summ_gamma2 <- summ_gamma |> 
-  mutate( treatment = as.character(treatment), 
-          magnitude_level = as.numeric(magnitude_level) ) 
-under_over_scen2 <- under_over_scen |> 
-  mutate( treatment = as.character(treatment), 
-          magnitude_level = as.numeric(magnitude_level) ) # Now join 
-tab_consistency <- summ_gamma2 |> left_join( under_over_scen2, by = c( "treatment" = "treatment", "nobs" = "nobs", "prop_extreme" = "pct_extreme", "magnitude_level" = "magnitude_level" ) )
 
 # Aggregate to treatment-level “consistency” table
 tab_consistency <- summ_gamma |>
@@ -393,6 +389,14 @@ tab_consistency <- summ_gamma |>
   group_by(treatment) %>%
   summarise(
     n_scen = dplyr::n(),
+    
+    total_under = sum(n_under, na.rm = TRUE), # total reps underestimating 
+    total_over = sum(n_over, na.rm = TRUE), # total reps overestimating 
+    total_reps = sum(n_scen, na.rm = TRUE), # total reps across scenarios 
+    
+    avg_under_per_scen = mean(n_under, na.rm = TRUE), 
+    avg_over_per_scen = mean(n_over, na.rm = TRUE),
+    
     share_scen_under = mean(bias < 0, na.rm = TRUE),  
     # % scenarios with negative mean bias
     share_scen_over  = mean(bias > 0, na.rm = TRUE),
@@ -402,13 +406,12 @@ tab_consistency <- summ_gamma |>
 
 gt_consistency <- tab_consistency %>%
   mutate(
-    avg_mean_bias = scales::number(avg_mean_bias, accuracy = 0.0001),
-    med_mean_bias = scales::number(med_mean_bias, accuracy = 0.0001),
     share_scen_under = scales::percent(share_scen_under, accuracy = 0.1),
     share_scen_over  = scales::percent(share_scen_over, accuracy = 0.1),
-    share_scen_under_majority = scales::percent(share_scen_under_majority, accuracy = 0.1),
-    mean_cov = scales::percent(mean_cov, accuracy = 0.1),
-    mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001)
+    share_scen_under_majority = scales::percent(
+      share_scen_under_majority, accuracy = 0.1)
+   #  mean_cov = scales::percent(mean_cov, accuracy = 0.1),
+    # mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001)
   ) %>%
   gt::gt() %>%
   gt::tab_header(
@@ -417,12 +420,126 @@ gt_consistency <- tab_consistency %>%
   )
 
 gt_consistency
+
+gt::gtsave(
+  gt_consistency,
+    here::here("results/tbl_over_under_tx.rtf")
+)
 ```    
 
 
 ## Plots  
 
 ### Lollipop  
+
+```{r lolly1}
+
+prep_plot_bias_over_under <- summ_gamma |>
+  left_join(
+    under_over_scen |>
+      mutate(
+        prop_extreme = case_when(
+          prop_extreme == 1 ~ 0.01,
+          prop_extreme == 2 ~ 0.05,
+          prop_extreme == 3 ~ 0.10
+        )
+      ),
+    by = c("treatment", "nobs", "prop_extreme", "magnitude_level")
+  ) |>
+  mutate(
+    nobs = factor(nobs, levels = c(5000, 10000, 20000)),
+    prop_extreme = factor(prop_extreme, levels = c(0.01, 0.05, 0.10)),
+    magnitude_level = factor(magnitude_level, levels = c(1, 2, 3)),
+    treatment = factor(treatment),
+    scenario = glue::glue("p={prop_extreme}, n={nobs}, m={magnitude_level}")
+  ) |>
+  arrange(nobs, prop_extreme, magnitude_level, treatment) |>
+  mutate(
+    scenario = factor(scenario, levels = rev(unique(scenario)))
+  )
+
+x_min <- min(prep_plot_bias_over_under$bias, na.rm = TRUE) # -0.024372
+x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.10535
+
+
+
+# table 
+tab_27 <- prep_plot_bias_over_under |>
+  group_by(treatment) |>
+  summarise(
+    n_scen = n(),   # should be 27
+
+    scen_under = sum(bias < 0, na.rm = TRUE),
+    scen_over  = sum(bias > 0, na.rm = TRUE),
+    scen_under_majority = sum(under_majority, na.rm = TRUE),
+
+    prop_scen_under = scen_under / 27,
+    prop_scen_over  = scen_over  / 27,
+    prop_scen_under_majority = scen_under_majority / 27,
+
+    .groups = "drop"
+  )
+
+tab_27 |> 
+  mutate(
+    prop_scen_under = scales::percent(prop_scen_under, accuracy = 0.1),
+    prop_scen_over  = scales::percent(prop_scen_over, accuracy = 0.1),
+    prop_scen_under_majority = scales::percent(
+      prop_scen_under_majority, accuracy = 0.1),
+  ) |> 
+  gt() |> 
+  gtsave(here::here("results/tab_27.rtf"))
+
+
+plots_bias <- prep_plot_bias_over_under |> 
+  group_split(treatment) |> 
+  map(~ { trt <- unique(.x$treatment) 
+  ggplot(.x, aes(x = bias, y = scenario)) + 
+    geom_segment(
+      aes(x = 0, xend = bias, y = scenario, yend = scenario), 
+      linewidth = 0.6, color = "grey60") + 
+    geom_point(size = 3, color = "steelblue") + 
+    scale_x_continuous(limits = c(x_min, x_max)) + 
+    labs( x = "Bias", y = "Scenario (prop_extreme, nobs, magnitude_level)", 
+          title = paste("Lollipop Chart of Bias — Treatment:", trt) ) +
+    theme_minimal(base_size = 13) + 
+    theme( panel.grid.major.y = element_blank(), 
+           panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size = 10), 
+           plot.title = element_text(face = "bold"), 
+           axis.title.y = element_blank() ) }
+  )
+
+
+plots_bias[[1]]
+plots_bias
+
+# df_plot |>
+#   group_split(treatment) |>
+#   walk(~ {
+#     trt <- unique(.x$treatment)
+# 
+#     p <- ggplot(.x, aes(x = scenario, y = bias)) +
+#       geom_segment(aes(x = scenario, xend = scenario, y = 0, yend = bias),
+#                    linewidth = 0.6, color = "grey60") +
+#       geom_point(size = 3, color = "steelblue") +
+#       labs(
+#         x = "Scenario",
+#         y = "Bias",
+#         title = glue::glue("Bias Across Scenarios — Treatment: {trt}")
+#       ) +
+#       theme_minimal(base_size = 13) +
+#       theme(
+#         panel.grid.major.x = element_blank(),
+#         axis.text.x = element_text(size = 9, angle = 45, hjust = 1)
+#       )
+# 
+#     print(p)
+#   })
+
+
+```
+
 
 ```{r plots_dir}
 
