@@ -341,34 +341,55 @@ under_over_scen <- all_df_gamma %>%
     pct_over = scales::percent(over_rate, accuracy = 0.1)
   ) |> 
   ungroup() |> 
+  select(treatment, n_design, nobs, prop_extreme, magnitude_level, pct_under, pct_over, under_rate, over_rate) |> 
+  mutate(
+     # 'consistently under' if majority of reps are < 0 bias in that scenario
+    under_majority = under_rate > 0.5,
+    over_majority  = over_rate > 0.5
+  ) |>
+  mutate(
+    prop_extreme = as.numeric(prop_extreme),
+    magnitude_level = as.numeric(magnitude_level),
+    treatment = as.character(treatment)
+  )
+
+under_over_scen |> 
+  arrange(nobs, pct_extreme, magnitude_level, treatment) |> 
   mutate(
     treatment = factor(
       treatment,
       levels = c("raw","topcode","mean_adj","median_adj","truncate"),
       labels = c("Raw","Top-coding", "Mean-preserved top-coding", "Median-preserved top-coding","Truncation"))
     ) |> 
-  select(treatment, n_design, nobs, prop_extreme, magnitude_level, pct_under, pct_over)
-
-under_over_scen |> 
-  arrange(nobs, prop_extreme, magnitude_level, treatment) |> 
-  
+  select(-c(under_rate, over_rate)) |> 
   gt() |> 
   gt::gtsave(
     here::here("results/tbl_over_under_scen.rtf")
 )
 
-# Scenario-level merge with empirical SE and coverage
-scenario_stats <- summ_gamma %>%
-  left_join(under_over_scen,
-            by = c("treatment", "n", "prop_extreme", "magnitude_level")) %>%
-  mutate(
-    # 'consistently under' if majority of reps are < 0 bias in that scenario
-    under_majority = under_rate > 0.5,
-    over_majority  = over_rate > 0.5
-  )
+summ_gamma2 <- summ_gamma |> 
+  mutate( treatment = as.character(treatment), 
+          magnitude_level = as.numeric(magnitude_level) ) 
+under_over_scen2 <- under_over_scen |> 
+  mutate( treatment = as.character(treatment), 
+          magnitude_level = as.numeric(magnitude_level) ) # Now join 
+tab_consistency <- summ_gamma2 |> left_join( under_over_scen2, by = c( "treatment" = "treatment", "nobs" = "nobs", "prop_extreme" = "pct_extreme", "magnitude_level" = "magnitude_level" ) )
 
 # Aggregate to treatment-level “consistency” table
-tab_consistency <- scenario_stats %>%
+tab_consistency <- summ_gamma |>
+  mutate(
+    treatment = as.character(treatment)) |>
+  left_join( 
+    under_over_scen |> 
+      mutate(prop_extreme = 
+               case_when(prop_extreme == 1 ~ 0.01,
+                         prop_extreme == 2 ~ 0.05,
+                         prop_extreme == 3 ~ 0.10)),
+    by = c("treatment",
+      "nobs", 
+      "prop_extreme",
+      "magnitude_level")
+    ) |>
   group_by(treatment) %>%
   summarise(
     n_scen = dplyr::n(),
@@ -376,8 +397,6 @@ tab_consistency <- scenario_stats %>%
     # % scenarios with negative mean bias
     share_scen_over  = mean(bias > 0, na.rm = TRUE),
     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
-    mean_cov = mean(coverage, na.rm = TRUE),
-    mean_emp_se = mean(emp_se, na.rm = TRUE),
     .groups = "drop"
   )
 
