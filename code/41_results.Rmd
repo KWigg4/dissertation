@@ -128,76 +128,159 @@ gtsave(gt_bias_descr, here::here("results/tbl_bias_descr.rtf"))
 gt_bias_full_overall
 
 # ---- Empirical SE (overall) ----
-tab_gamma_empse_overall <- summ_gamma %>%
-  dplyr::group_by(treatment) %>%
-  dplyr::summarise(
-    scenarios   = dplyr::n(),
-    mean_emp_se = mean(emp_se, na.rm = TRUE),
-    sd_emp_se   = sd(emp_se, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-gt_gamma_empse_overall <- tab_gamma_empse_overall %>%
-  dplyr::mutate(
-    mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001),
-    sd_emp_se   = scales::number(sd_emp_se, accuracy = 0.0001)
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction — Descriptive Statistics: Empirical SE (All Scenarios)",
-    subtitle = "Empirical SE = Monte Carlo SD of the estimator across replications"
-  ) %>%
-  gt::tab_options(data_row.padding = gt::px(1))
+# tab_gamma_empse_overall <- summ_gamma %>%
+#   dplyr::group_by(treatment) %>%
+#   dplyr::summarise(
+#     scenarios   = dplyr::n(),
+#     mean_emp_se = mean(emp_se, na.rm = TRUE),
+#     sd_emp_se   = sd(emp_se, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# gt_gamma_empse_overall <- tab_gamma_empse_overall %>%
+#   dplyr::mutate(
+#     mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001),
+#     sd_emp_se   = scales::number(sd_emp_se, accuracy = 0.0001)
+#   ) %>%
+#   gt::gt() %>%
+#   gt::tab_header(
+#     title = "Gamma Interaction — Descriptive Statistics: Empirical SE (All Scenarios)",
+#     subtitle = "Empirical SE = Monte Carlo SD of the estimator across replications"
+#   ) %>%
+#   gt::tab_options(data_row.padding = gt::px(1))
 
 # Helper to get quantiles safely
-q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+# q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+# 
+# tab_empse <- summ_gamma %>%
+#   dplyr::group_by(treatment) %>%
+#   dplyr::summarise(
+#     scenarios       = dplyr::n(),
+#     mean_emp_se     = mean(emp_se, na.rm = TRUE),
+#     sd_emp_se       = sd(emp_se, na.rm = TRUE),
+#     median_emp_se   = median(emp_se, na.rm = TRUE),
+#     mad_emp_se      = mad(emp_se, na.rm = TRUE),
+#     min_emp_se      = min(emp_se, na.rm = TRUE),
+#     q1_emp_se       = q_fun(emp_se, 0.25),
+#     q3_emp_se       = q_fun(emp_se, 0.75),
+#     iqr_emp_se      = q3_emp_se - q1_emp_se,
+#     max_emp_se      = max(emp_se, na.rm = TRUE),
+#     .groups = "drop"
+#   )
+# 
+# gt_empse <- tab_empse %>%
+#   dplyr::mutate(
+#     dplyr::across(
+#       c(mean_emp_se, sd_emp_se, median_emp_se, mad_emp_se,
+#         min_emp_se, q1_emp_se, q3_emp_se, iqr_emp_se, max_emp_se),
+#       ~ scales::number(.x, accuracy = 0.0001)
+#     )
+#   ) %>%
+#   gt::gt() %>%
+#   gt::tab_header(
+#     title = "Gamma Interaction — Full Descriptive Statistics: Empirical SE",
+#     subtitle = "Scenario-level empirical SE (Monte Carlo SD of the estimator) summarised across scenarios by treatment"
+#   ) %>%
+#   gt::cols_label(
+#     scenarios = "N scenarios",
+#     mean_emp_se = "Mean",
+#     sd_emp_se = "SD",
+#     median_emp_se = "Median",
+#     mad_emp_se = "MAD",
+#     min_emp_se = "Min",
+#     q1_emp_se = "Q1",
+#     q3_emp_se = "Q3",
+#     iqr_emp_se = "IQR",
+#     max_emp_se = "Max"
+#   ) %>%
+#   gt::tab_options(data_row.padding = gt::px(1))
+# 
+# gt_empse_full_overall |> 
+#   gtsave(
+#     here::here("results/tbl_empse_descr.rtf")
+#   )
 
-tab_empse_full_overall <- summ_gamma %>%
-  dplyr::group_by(treatment) %>%
-  dplyr::summarise(
-    scenarios       = dplyr::n(),
-    mean_emp_se     = mean(emp_se, na.rm = TRUE),
-    sd_emp_se       = sd(emp_se, na.rm = TRUE),
-    median_emp_se   = median(emp_se, na.rm = TRUE),
-    mad_emp_se      = mad(emp_se, na.rm = TRUE),
-    min_emp_se      = min(emp_se, na.rm = TRUE),
-    q1_emp_se       = q_fun(emp_se, 0.25),
-    q3_emp_se       = q_fun(emp_se, 0.75),
-    iqr_emp_se      = q3_emp_se - q1_emp_se,
-    max_emp_se      = max(emp_se, na.rm = TRUE),
+compute_ESE_metrics <- function(df) {
+
+  df |>
+    group_by(treatment, nobs, prop_extreme, magnitude_level) |>
+    summarise(
+      # Empirical standard error
+      ese = sd(est, na.rm = TRUE),
+
+      # Model-based SE summaries
+      se_model_mean = mean(se, na.rm = TRUE),
+      se_model_median = median(se, na.rm = TRUE),
+
+      # Ratio of empirical to model SE
+      ratio_ese_model = ese / se_model_mean,
+
+      # RMSE of SE estimator
+      rmse_se = sqrt(mean((se - ese)^2, na.rm = TRUE)),
+
+      # Monte Carlo standard error of ESE
+      mcse_ese = sd(est, na.rm = TRUE) / sqrt(n()),
+
+      # Distribution summaries of ESE across reps
+      ese_min = min(est, na.rm = TRUE),
+      ese_max = max(est, na.rm = TRUE),
+      ese_median = median(est, na.rm = TRUE),
+      ese_mad = mad(est, na.rm = TRUE),
+
+      # Under/over calibration
+      prop_under_se = mean(se < ese, na.rm = TRUE),
+      under_majority_se = prop_under_se > 0.5,
+
+      .groups = "drop"
+    )
+}
+
+ese_results <- compute_ESE_metrics(all_df_gamma)
+
+ese_by_treatment <-  ese_results |>
+  group_by(treatment) |>
+  summarise(
+    mean_ese = mean(ese),
+    median_ese = median(ese),
+    sd_ese = sd(ese),
+    mad_ese = mad(ese),
+    min_ese = min(ese),
+    max_ese = max(ese),
+
+    # calibration across treatments
+    n_treat_under = sum(under_majority_se),
+    prop_treat_under = mean(under_majority_se),
+
     .groups = "drop"
   )
 
-gt_empse_full_overall <- tab_empse_full_overall %>%
+ese_by_treatment_gt <- ese_by_treatment %>%
   dplyr::mutate(
     dplyr::across(
-      c(mean_emp_se, sd_emp_se, median_emp_se, mad_emp_se,
-        min_emp_se, q1_emp_se, q3_emp_se, iqr_emp_se, max_emp_se),
+      c(mean_ese, sd_ese, median_ese, mad_ese,
+        min_ese, max_ese, prop_treat_under),
       ~ scales::number(.x, accuracy = 0.0001)
     )
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction — Full Descriptive Statistics: Empirical SE",
-    subtitle = "Scenario-level empirical SE (Monte Carlo SD of the estimator) summarised across scenarios by treatment"
-  ) %>%
-  gt::cols_label(
-    scenarios = "N scenarios",
-    mean_emp_se = "Mean",
-    sd_emp_se = "SD",
-    median_emp_se = "Median",
-    mad_emp_se = "MAD",
-    min_emp_se = "Min",
-    q1_emp_se = "Q1",
-    q3_emp_se = "Q3",
-    iqr_emp_se = "IQR",
-    max_emp_se = "Max"
-  ) %>%
-  gt::tab_options(data_row.padding = gt::px(1))
+  ) |> 
+  gt()
+ese_by_treatment_gt
 
-gt_empse_full_overall |> 
-  gtsave(
-    here::here("results/tbl_empse_descr.rtf")
+
+ese_by_scenario <- ese_results |>
+  group_by(nobs, prop_extreme, magnitude_level) |>
+  summarise(
+    mean_ese = mean(ese),
+    median_ese = median(ese),
+    sd_ese = sd(ese),
+    mad_ese = mad(ese),
+    min_ese = min(ese),
+    max_ese = max(ese),
+
+    # calibration across treatments
+    n_treat_under = sum(under_majority_se),
+    prop_treat_under = mean(under_majority_se),
+
+    .groups = "drop"
   )
 
 # ---- Coverage (overall) ----
@@ -827,7 +910,7 @@ fn_save_results(aov_bias_t3_pes)
 # B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
 aov_empse_t3_pes <- aov_type3_pes(
   emp_se ~ treatment * n * prop_extreme * magnitude_level, 
-  data = summ_grid_gamma )
+  data = summ_gamma )
 
 fn_save_results(aov_empse_t3_pes)
 
@@ -854,12 +937,12 @@ aov_gamma_cov_t3 <- car::Anova(aov_gamma_cov, type = 3)
 
 
 # --- Full factorial at replicate level now has residual df (many reps per cell) ---
-aov_cov_t3_pes <- aov_type3_pes(
+aov_cov_t3_pes_replicate <- aov_type3_pes(
   cover_ind ~ treatment * n * prop_extreme * magnitude_level,
   data = all_df_gamma
   )
 
-fn_save_results(aov_cov_t3_pes)
+fn_save_results(aov_cov_t3_pes_replicate)
 
 
 # ATT_hat across conditions (ignore the pes part)
@@ -869,11 +952,24 @@ aov_att_hat_t3 <- aov_type3_pes(
 )
 fn_save_results(aov_att_hat_t3)
 
+# ATT across condition
+aov_att_est_t3 <- aov_type3_pes(
+  # use est? 
+  est ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_att
+) |> 
+  # remove partial eta-squared that's in the function for the other outcomes not this one. 
+  select(-pes)
+fn_save_results(aov_att_est_t3)
+
 # ATT_bias across conditions (recommended DV)
 aov_att_bias_t3 <- aov_type3_pes(
   bias ~ treatment * n * prop_extreme * magnitude_level, 
   data = all_df_att
-)
+) |> 
+  # don't report pes for this, it's just calculated in the function for others
+  select(-pes)
+
 fn_save_results(aov_att_bias_t3)
 
 
