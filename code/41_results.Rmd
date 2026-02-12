@@ -51,7 +51,37 @@ fn_save_results <- function(df) {
 
 ```{r get_data}
 all_df <- readRDS(here::here("results/all_df_2026-02-06.RDS"))
-summ_gamma <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS"))
+
+summ_gamma <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS")) %>% 
+  mutate(
+    nobs_fct = factor(
+      nobs,
+      levels = c("5000","10000","20000"),
+      labels = c("5,000","10,000","20,000")),
+    prop_extreme_fct = factor(
+      prop_extreme,
+      levels = c("0.01","0.05","0.1"),
+      labels = c("1%", "5%", "10%")),
+    magnitude_fct = factor(
+      magnitude_level,
+      levels = c(1,2,3),
+      labels = c(1, 2, 3)),
+    treatment_fct = factor(
+      treatment,
+      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
+      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
+                 "Median-preserved top-coding", "Truncation"))
+    ) %>%
+  mutate(
+    across(c(mean_est, bias, emp_se, rmse, coverage), ~round(.x, 4))) |> 
+  # just reorder and remove n
+  select(design_id, n_design, model, 
+         nobs, nobs_fct, 
+         prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct,
+         treatment, treatment_fct,
+         everything())
+
 summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS"))
 all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS"))
 all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))
@@ -128,6 +158,13 @@ gt_bias_descr <- tab_bias_descr %>%
 gtsave(gt_bias_descr, here::here("results/tbl_bias_descr.rtf"))
 
 gt_bias_full_overall
+
+tbl_bias_summ <- summ_gamma |> 
+  select(design_id, nobs_fct, prop_extreme_fct, magnitude_fct, 
+         treatment_fct, bias) |> 
+  mutate(over_under = ifelse(bias>0, "Over","Under"))
+
+fn_save_results(tbl_bias_summ)
 
 # ---- Empirical SE (overall) ----
 # tab_gamma_empse_overall <- summ_gamma %>%
@@ -792,7 +829,9 @@ plot_cov_heat <- summ_gamma %>%
 plot_cov_heat
 ggsave(here::here(paste0("figures/gamma_coverage_heat_", dt, ".png")),
        plot_cov_heat, width = 11, height = 8, dpi = 300)
-```  
+```    
+
+
 2D. Consistency bars: % of scenarios with majority underestimation  
 ```{r fig_underest}
 
@@ -840,163 +879,238 @@ cat(paste0("- ", sentences, collapse = "\n"))
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
 
-```{r fn_aov_type3}
-aov_type3_pes <- function(formula, data) {
-  # Needed packages
-  if (!requireNamespace("car", quietly = TRUE)) {
-    stop("Please install the 'car' package for Type III SS.")
-  }
-  if (!requireNamespace("dplyr", quietly = TRUE)) {
-    stop("Please install the 'dplyr' package.")
-  }
-  
-  # Fit the model
-  model <- aov(formula, data = data)
-  
-  # Type III ANOVA table
-  a3 <- car::Anova(model, type = 3)
-  # Convert to data frame
-  tab <- as.data.frame(a3)
-  tab$term <- rownames(tab)
-  rownames(tab) <- NULL
-  # Compute Mean Sq
-  tab$`Mean Sq` <- tab$`Sum Sq` / tab$Df
-  # Identify residual/error row
-  error_row <- grepl("Residual", tab$term, ignore.case = TRUE)
-  ss_error  <- tab$`Sum Sq`[error_row]
-  # Compute partial eta squared
-  tab$pes <- ifelse(
-    !error_row,
-    tab$`Sum Sq` / (tab$`Sum Sq` + ss_error),
-    NA_real_
+
+
+```{r aov_bias}
+
+
+# Type III ANOVA with Eta² and Partial Eta² for Gamma Bias
+
+
+# A) factorial ANOVA on gamma bias (at rep-level, per meeting with Tsai)
+# Load required packages
+pacman::p_load(car, effectsize, dplyr, tibble, knitr, kableExtra)
+
+# Ensure factors are properly set
+all_df_gamma <- all_df_gamma %>%
+  mutate(
+    treatment = factor(treatment),
+    nobs = factor(nobs),
+    prop_extreme = factor(prop_extreme),
+    magnitude_level = factor(magnitude_level)
   )
-  # Apply rounding rules
-  tab_out <- tab |>
-    dplyr::mutate(
-      `Sum Sq`  = round(`Sum Sq`, 2),
-      `Mean Sq` = round(`Mean Sq`, 2),
-      `F value` = ifelse(!is.na(`F value`), round(`F value`, 2), NA_real_),
-      `Pr(>F)` = dplyr::case_when(
-        is.na(`Pr(>F)`) ~ NA_character_,
-        round(`Pr(>F)`, 3) < 0.001 ~ "<.001",
-        TRUE ~ sprintf("%.3f", round(`Pr(>F)`, 3))
-      ),
-      # partial eta squared: 3 decimals with <.001 rule
-      pes = dplyr::case_when(
-        is.na(pes) ~ NA_character_,
-        round(pes, 3) < 0.001 & pes > 0 ~ "<.001",
-        TRUE ~ sprintf("%.3f", round(pes, 3))
-      )
-    ) |>
-    dplyr::select(term, Df, `Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`, pes)
-  tab_out
+
+
+# Set contrasts for Type III SS (required!)
+options(contrasts = c("contr.sum", "contr.poly"))
+
+
+# 1: Fit model
+model <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
+             data = all_df_gamma)
+
+
+# 2: Type III Sum of Squares ANOVA Table
+
+type3_anova <- car::Anova(model, type = "III")
+print(type3_anova)
+
+# 3: Effect Sizes (eta sq and partial eta sq)
+
+eta2_regular <- effectsize::eta_squared(model, partial = FALSE, ci = 0.95)
+eta2_partial <- effectsize::eta_squared(model, partial = TRUE,  ci = 0.95)
+print(eta2_partial)
+
+# 4: Comb. Table (get Type III SS + Effect Sizes)
+
+type3_df <- type3_anova %>%
+  as.data.frame() %>%
+  rownames_to_column("Term") %>%
+  filter(Term != "Residuals")
+
+eta2_reg_df <- eta2_regular %>%
+  as.data.frame() %>%
+  select(Parameter, Eta2, CI_low, CI_high) %>%
+  rename(Eta2_CI_low = CI_low, Eta2_CI_high = CI_high)
+
+eta2_part_df <- eta2_partial %>%
+  as.data.frame() %>%
+  select(Parameter, Eta2_partial, CI_low, CI_high) %>%
+  rename(Eta2_partial_CI_low = CI_low, Eta2_partial_CI_high = CI_high)
+
+# combine , all (full)
+combined_table_full <- type3_df %>%
+  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
+  left_join(eta2_part_df, by = c("Term" = "Parameter")) %>%
+  select(Term, Df, `Sum Sq`, `F value`, `Pr(>F)`, 
+         Eta2, Eta2_CI_low, Eta2_CI_high,
+         Eta2_partial, Eta2_partial_CI_low, Eta2_partial_CI_high) %>%
+  arrange(desc(`F value`))
+
+print(combined_table_full, digits = 4)
+
+# combine simple (point estimates only - could b better for publication??)
+combined_table <- type3_df %>%
+  left_join(eta2_reg_df %>% select(Parameter, Eta2), 
+            by = c("Term" = "Parameter")) %>%
+  left_join(eta2_part_df %>% select(Parameter, Eta2_partial), 
+            by = c("Term" = "Parameter")) %>%
+  mutate(
+    `Sum Sq` = round(`Sum Sq`, 6),
+    `F value` = round(`F value`, 3),
+    `Pr(>F)` = format.pval(`Pr(>F)`, digits = 3, eps = 0.001),
+    Eta2 = round(Eta2, 4),
+    Eta2_partial = round(Eta2_partial, 4)
+  ) %>%
+  select(Term, Df, `Sum Sq`, `F value`, `Pr(>F)`, Eta2, Eta2_partial) %>%
+  arrange(desc(`F value`))
+
+print(combined_table)
+
+# 5: Export to CSV
+
+# full table with CIs
+write.csv(combined_table_full, 
+          file = paste0("results/anova_type3_full_", dt, ".csv"),
+          row.names = FALSE)
+
+# simplified table
+write.csv(combined_table, 
+          file = paste0("results/anova_type3_simple_", dt, ".csv"),
+          row.names = FALSE)
+
+
+# 6: publication-ready tbl (HTML/PDF output? )
+#============================================================
+
+combined_table %>%
+  mutate(
+    `95% CI (η²)` = paste0("[", round(Eta2_CI_low, 3), ", ", 
+                           round(Eta2_CI_high, 3), "]"),
+    `95% CI (η²p)` = paste0("[", round(Eta2_partial_CI_low, 3), ", ", 
+                            round(Eta2_partial_CI_high, 3), "]")
+  ) %>%
+  select(Term, Df, `F value`, `Pr(>F)`, Eta2, Eta2_partial) %>%
+  kable(
+    caption = "Type III ANOVA with Effect Sizes: Gamma Model Bias",
+    digits = c(0, 0, 3, 4, 4, 4),
+    col.names = c("Effect", "df", "F", "p", "η²", "η²p"),
+    align = c("l", "r", "r", "r", "r", "r")
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE
+  ) %>%
+  footnote(
+    general = "η² = eta-squared; η²p = partial eta-squared. Effect size benchmarks: small (0.01), medium (0.06), large (0.14).",
+    general_title = "Note:",
+    footnote_as_chunk = TRUE
+  )
+
+
+# 7: Identify Significant Effects and Large Effect Sizes
+
+significant_effects <- combined_table %>%
+  filter(`Pr(>F)` < 0.001 | `Pr(>F)` == "<.001") %>%
+  arrange(desc(Eta2_partial))
+
+cat("\n=== SIGNIFICANT EFFECTS (p < .001) ===\n")
+print(significant_effects)
+
+large_effects <- combined_table %>%
+  filter(Eta2_partial >= 0.06) %>%  # Medium to large effects
+  arrange(desc(Eta2_partial))
+
+cat("\n=== MEDIUM TO LARGE EFFECT SIZES (η²p ≥ .06) ===\n")
+print(large_effects)
+
+
+# 8: Summary Statistics
+
+cat("\n=== SUMMARY ===\n")
+cat("Total effects tested:", nrow(combined_table), "\n")
+cat("Significant at p < .001:", sum(grepl("<.001", combined_table$`Pr(>F)`)), "\n")
+cat("Significant at p < .05:", sum(as.numeric(gsub("<.001", "0", combined_table$`Pr(>F)`)) < 0.05), "\n")
+cat("Medium+ effect sizes (η²p ≥ .06):", sum(combined_table$Eta2_partial >= 0.06, na.rm = TRUE), "\n")
+cat("Largest partial eta²:", round(max(combined_table$Eta2_partial, na.rm = TRUE), 4), 
+    "for", combined_table$Term[which.max(combined_table$Eta2_partial)], "\n")
+
+
+# opt: post-hoc tests for significant main effects? Need?
+
+# for pairwise comparisons for significant effects:
+library(emmeans)
+
+# ex: Post-hoc for treatment effect
+if ("treatment" %in% significant_effects$Term) {
+  cat("\n=== POST-HOC: Pairwise Comparisons for Treatment ===\n")
+  emm_treatment <- emmeans(model, ~ treatment)
+  pairs_treatment <- pairs(emm_treatment, adjust = "tukey")
+  print(pairs_treatment)
+  
+  # Save post-hoc results
+  write.csv(as.data.frame(pairs_treatment),
+            file = paste0("results/posthoc_treatment_", dt, ".csv"),
+            row.names = FALSE)
 }
 
-```  
+# ex: Post-hoc for magnitude_level (if significant)
+if ("magnitude_level" %in% significant_effects$Term) {
+  cat("\n=== POST-HOC: Pairwise Comparisons for Magnitude Level ===\n")
+  emm_mag <- emmeans(model, ~ magnitude_level)
+  pairs_mag <- pairs(emm_mag, adjust = "tukey")
+  print(pairs_mag)
+  
+  write.csv(as.data.frame(pairs_mag),
+            file = paste0("results/posthoc_magnitude_", dt, ".csv"),
+            row.names = FALSE)
+}
 
 
+# OPTIONAL: check ANOVA assumptions ? Need?
+
+cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
+
+# 1. Normality of residuals
+shapiro_test <- shapiro.test(residuals(model)[1:5000])  
+  # Shapiro limited to 5000 obs
+cat("Shapiro-Wilk test for normality: W =", 
+      round(shapiro_test$statistic, 4), 
+    ", p =", format.pval(shapiro_test$p.value), "\n")
+
+# 2. Levene / Homogeneity of variance
+levene_test <- car::leveneTest(bias ~ treatment * n * prop_extreme * magnitude_level, 
+                               data = all_df_gamma)
+cat("Levene's test for homogeneity: F =", round(levene_test$`F value`[1], 4),
+    ", p =", format.pval(levene_test$`Pr(>F)`[1]), "\n")
+
+# 3. Diagnostic plots
+png(paste0("figures/anova_diagnostics_", dt, ".png"), width = 10, height = 8, 
+    units = "in", res = 300)
+par(mfrow = c(2, 2))
+plot(model)
+dev.off()
+
+cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
 
 
-```{r}
+```    
 
-
-# A) factorial ANOVA on gamma bias (rep-level)
-# (Felix's)
-
-aov_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_gamma)
-car::Anova(aov_bias, type=3)
-effectsize::eta_squared(aov_bias, partial=TRUE)
-
-
-
-# B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
-aov_empse_t3_pes <- aov_type3_pes(
-  emp_se ~ treatment * n * prop_extreme * magnitude_level, 
-  data = summ_gamma )
-
-fn_save_results(aov_empse_t3_pes)
-
-aov_bias <- aov(emp_se ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_gamma)
-car::Anova(aov_bias, type=3)
-effectsize::eta_squared(aov_bias, partial=TRUE)
-
-# C) coverage: scenario-level proportion (recommended)
+```{r cov_grid}
+# C) coverage will just be descriptive
 cov_grid <- all_df_gamma %>%
   group_by(treatment, n, prop_extreme, magnitude_level) %>%
   summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
 
 fn_save_results(cov_grid)
 
-## Ask about this
-aov_cov_scenario <- aov_type3_pes(
-  coverage ~ treatment * n * prop_extreme * magnitude_level, 
-  data = cov_grid
-)
-
-aov_gamma_cov <- aov(
-  coverage ~ treatment * n * prop_extreme * magnitude_level, data = cov_grid)
-aov_gamma_cov_t3 <- car::Anova(aov_gamma_cov, type = 3)
-# summary(aov_gamma_cov)
-# eta_squared(aov_gamma_cov, partial=TRUE) 
-
-## ^^ effect size won't run because only one row per. Need to re-do: 
-
-
-# --- Full factorial at replicate level now has residual df (many reps per cell) ---
-aov_cov_t3_pes_replicate <- aov_type3_pes(
-  cover_ind ~ treatment * n * prop_extreme * magnitude_level,
-  data = all_df_gamma
-  )
-
-fn_save_results(aov_cov_t3_pes_replicate)
-
-
-# ATT_hat across conditions (ignore the pes part)
-aov_att_hat_t3 <- aov_type3_pes(
-  est ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_att
-)
-fn_save_results(aov_att_hat_t3)
-
-# ATT across condition
-aov_att_est_t3 <- aov_type3_pes(
-  # use est? 
-  est ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_att
-) |> 
-  # remove partial eta-squared that's in the function for the other outcomes not this one. 
-  select(-pes)
-fn_save_results(aov_att_est_t3)
-
-# ATT_bias across conditions (recommended DV)
-aov_att_bias_t3 <- aov_type3_pes(
-  bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_att
-) |> 
-  # don't report pes for this, it's just calculated in the function for others
-  select(-pes)
-
-fn_save_results(aov_att_bias_t3)
-
-# trying on summ_att to see if SS are better / if even the same??;  
-aov_att_bias_t3_summ <- aov_type3_pes(
-  bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data =summ_att
-) |> 
-  # don't report pes for this, it's just calculated in the function for others
-  select(-pes)
-
-fn_save_results(aov_att_bias_t3_summ)
-
-
-# # Effect size (d_est) across conditions (optional but usually helpful)
-# aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
-# summary(aov_att_d)
-
-
 ```  
+
+```{r aov_att_absbias}
+# D) Do anova on ATT absolute bias, not bias, at the replicate level.
+```
+
+
 
 
 
