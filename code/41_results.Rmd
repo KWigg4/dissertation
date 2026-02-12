@@ -56,6 +56,8 @@ summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS"))
 all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS"))
 all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))
 
+summ_att <- summ_grid |> 
+  filter(model=="ATT")
 ```
 
 
@@ -899,12 +901,13 @@ aov_type3_pes <- function(formula, data) {
 
 
 # A) factorial ANOVA on gamma bias (rep-level)
-aov_bias_t3_pes <- aov_type3_pes(
-  bias ~ treatment * n * prop_extreme * magnitude_level, 
-  data = all_df_gamma
-)
+# (Felix's)
 
-fn_save_results(aov_bias_t3_pes)
+aov_bias <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_gamma)
+car::Anova(aov_bias, type=3)
+effectsize::eta_squared(aov_bias, partial=TRUE)
+
 
 
 # B) factorial ANOVA on gamma emp SE  (vs model SE, bc emp SE is the SD of the 500 est's of the coefficient, not the average of the model SE's, right?)
@@ -913,6 +916,11 @@ aov_empse_t3_pes <- aov_type3_pes(
   data = summ_gamma )
 
 fn_save_results(aov_empse_t3_pes)
+
+aov_bias <- aov(emp_se ~ treatment * n * prop_extreme * magnitude_level, 
+  data = all_df_gamma)
+car::Anova(aov_bias, type=3)
+effectsize::eta_squared(aov_bias, partial=TRUE)
 
 # C) coverage: scenario-level proportion (recommended)
 cov_grid <- all_df_gamma %>%
@@ -972,183 +980,22 @@ aov_att_bias_t3 <- aov_type3_pes(
 
 fn_save_results(aov_att_bias_t3)
 
+# trying on summ_att to see if SS are better / if even the same??;  
+aov_att_bias_t3_summ <- aov_type3_pes(
+  bias ~ treatment * n * prop_extreme * magnitude_level, 
+  data =summ_att
+) |> 
+  # don't report pes for this, it's just calculated in the function for others
+  select(-pes)
+
+fn_save_results(aov_att_bias_t3_summ)
+
 
 # # Effect size (d_est) across conditions (optional but usually helpful)
 # aov_att_d <- aov(d_est ~ treatment * n * prop_extreme * magnitude_level, data = all_df_att)
 # summary(aov_att_d)
 
 
-```  
-
-## ANOVA effect-size reporting for eta-squared with p-values    
-
-Reusable helper to extract eta-squared and p-values from an aov object  
-This should pull p-values from `broom::tidy()` and eta-sq from `effectsize::eta_squared()`
-which matches with how ANOVAs are already fit. 
-```{r aov_eta_helper}
-eta_with_p <- function(aov_obj, model_label,
-                       type = c("eta2", "partial", "generalized"),
-                       include_ci = TRUE, conf_level = 0.90) {
-  type <- match.arg(type)
-
-  # ---- 1) Get a tidy ANOVA table and a reliable p-value column ----
-  # Try broom::tidy() first
-  tab <- tryCatch(broom::tidy(aov_obj), error = function(e) NULL)
-
-  if (is.null(tab)) {
-    # Fallback: coerce to data.frame (works for car::Anova and aov objects)
-    tab <- as.data.frame(aov_obj)
-    # Move term names from rownames into a column
-    tab <- tibble::rownames_to_column(tab, var = "term")
-  }
-
-  # Normalize the 'term' column name if broom gave a different label
-  if (!("term" %in% names(tab))) {
-    term_col <- grep("^term$|^Term$|^Effect$|^Parameter$", names(tab), value = TRUE)
-    if (length(term_col) == 1L) names(tab)[names(tab) == term_col] <- "term"
-  }
-
-  # Identify/construct p-values:
-  if (!("p.value" %in% names(tab))) {
-    # Look for common alternatives like Pr(>F), Pr..F., etc.
-    pv_alt <- grep("^Pr\\(>F\\)$|^Pr[.].*F[.]?$|^pval$|^p_value$", names(tab), value = TRUE)
-    if (length(pv_alt) == 1L) {
-      names(tab)[names(tab) == pv_alt] <- "p.value"
-    } else {
-      # As a last resort, try to compute p from F and dfs
-      # Find F statistic and dfs
-      f_col   <- grep("^F$|^F value$|^statistic$", names(tab), value = TRUE)
-      df1_col <- grep("^df$|^Df1$|^num_df$|^num\\.df$", names(tab), value = TRUE)
-      df2_col <- grep("^Df2$|^den_df$|^den\\.df$|^Residuals|^residual.df$|^error.df$", names(tab), value = TRUE)
-
-      if (length(f_col) == 1L && length(df1_col) >= 1L && length(df2_col) >= 1L) {
-        # Heuristic: If there is a single 'df' column, it might be numerator df; get denominator df from residuals row if present
-        if (length(df1_col) == 1L && length(df2_col) == 1L) {
-          Fval <- tab[[f_col]]
-          df1  <- tab[[df1_col]]
-          df2  <- tab[[df2_col]]
-          tab$p.value <- stats::pf(Fval, df1, df2, lower.tail = FALSE)
-        } else {
-          # If structure is ambiguous, set NA and let the rest continue
-          tab$p.value <- NA_real_
-        }
-      } else {
-        tab$p.value <- NA_real_
-      }
-    }
-  }
-
-  # Keep only needed columns and drop residuals row if present
-  tab_p <- tab %>%
-    dplyr::filter(!is.na(term), term != "Residuals") %>%
-    dplyr::select(term, p.value)
-
-  # ---- 2) effect sizes from effectsize::eta_squared() ----
-  ci_arg <- if (include_ci) conf_level else NULL
-  es <- switch(
-    type,
-    eta2 = effectsize::eta_squared(aov_obj, ci = ci_arg),
-    partial = effectsize::eta_squared(aov_obj, partial = TRUE, ci = ci_arg),
-    generalized = effectsize::eta_squared(aov_obj, generalized = TRUE, ci = ci_arg)
-  ) %>% as.data.frame()
-
-  # Standardize common column names
-  nm <- names(es)
-  if ("Parameter" %in% nm) names(es)[nm == "Parameter"] <- "term"
-  if ("Effect"    %in% nm) names(es)[nm == "Effect"]    <- "term"
-  if ("Term"      %in% nm) names(es)[nm == "Term"]      <- "term"
-
-  eta_col <- grep("^Eta2", names(es), value = TRUE)
-  if (length(eta_col) == 1L) names(es)[names(es) == eta_col] <- "eta2"
-  if ("CI_low"  %in% names(es)) names(es)[names(es) == "CI_low"]  <- "ci_low"
-  if ("CI_high" %in% names(es)) names(es)[names(es) == "CI_high"] <- "ci_high"
-  if (!("ci_low" %in% names(es))) {
-    ci_low_guess <- grep("^CI[_\\.]?low", names(es), value = TRUE)
-    if (length(ci_low_guess) == 1L) names(es)[names(es) == ci_low_guess] <- "ci_low"
-  }
-  if (!("ci_high" %in% names(es))) {
-    ci_high_guess <- grep("^CI[_\\.]?high", names(es), value = TRUE)
-    if (length(ci_high_guess) == 1L) names(es)[names(es) == ci_high_guess] <- "ci_high"
-  }
-
-  # ---- 3) Merge and label ----
-  out <- dplyr::left_join(es, tab_p, by = "term") %>%
-    dplyr::mutate(
-      model  = model_label,
-      es_type = switch(type, "eta2" = "eta^2", "partial" = "partial eta^2", "generalized" = "generalized eta^2"),
-      stars = dplyr::case_when(
-        !is.na(p.value) & p.value < .001 ~ "***",
-        !is.na(p.value) & p.value < .01  ~ "**",
-        !is.na(p.value) & p.value < .05  ~ "*",
-        !is.na(p.value) & p.value < .10  ~ "†",
-        TRUE ~ ""
-      )
-    ) %>%
-    dplyr::select(model, es_type, term, eta2,
-                  dplyr::any_of(c("ci_low", "ci_high")),
-                  p.value, stars)
-
-  out
-}
-```  
-
-Apply to ANOVAs and build tables 
-Groups rows by model (gamma bias, gamma coverage, ATT: bias), reports partial eta-eq, 90% CI, p-value, and sign. marks.
-
-If we want Type II/III SS rather than the Type I default of `aov()`, can refit with `car::Anova()` and pass that object to `effectsize::eta_squared()`. (ASK TSAI)  
-
-```{r}
-# ---- Collect effect sizes for all models ----
-es_eta2 <- dplyr::bind_rows(
-  eta_with_p(aov_gamma_bias,   "Gamma bias",         "eta2"),
-  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "eta2"),
-  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "eta2"),
-  eta_with_p(aov_att_hat,      "ATT: est",           "eta2"),
-  eta_with_p(aov_att_bias,     "ATT: bias",          "eta2"),
-  eta_with_p(aov_att_d,        "ATT: d_est",         "eta2")
-)
-
-es_partial <- dplyr::bind_rows(
-  eta_with_p(aov_gamma_bias,   "Gamma bias",         "partial"),
-  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "partial"),
-  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "partial"),
-  eta_with_p(aov_att_hat,      "ATT: est",           "partial"),
-  eta_with_p(aov_att_bias,     "ATT: bias",          "partial"),
-  eta_with_p(aov_att_d,        "ATT: d_est",         "partial")
-)
-
-es_gen <- dplyr::bind_rows(
-  eta_with_p(aov_gamma_bias,   "Gamma bias",         "generalized"),
-  eta_with_p(aov_gamma_emp_se, "Gamma empirical SE", "generalized"),
-  eta_with_p(aov_gamma_cov,    "Gamma coverage",     "generalized"),
-  eta_with_p(aov_att_hat,      "ATT: est",           "generalized"),
-  eta_with_p(aov_att_bias,     "ATT: bias",          "generalized"),
-  eta_with_p(aov_att_d,        "ATT: d_est",         "generalized")
-)
-
-# ---- Main table: partial eta^2 with p-values ----
-tbl_partial <- es_partial %>%
-  dplyr::mutate(
-    eta2_fmt = ifelse(is.na(eta2), NA_character_, scales::number(eta2, accuracy = 0.0001)),
-    ci_fmt = dplyr::if_else(
-      is.na(ci_low) | is.na(ci_high), "—",
-      paste0("[", scales::number(ci_low, accuracy = 0.0001), ", ",
-                  scales::number(ci_high, accuracy = 0.0001), "]")
-    ),
-    p_fmt = ifelse(is.na(p.value), "—", scales::pvalue(p.value, accuracy = 0.001))
-  ) %>%
-  dplyr::select(model, term, `partial eta^2` = eta2_fmt, CI = ci_fmt, `p-value` = p_fmt, sig = stars)
-
-gt_partial <- tbl_partial %>%
-  gt::gt(groupname_col = "model") %>%
-  gt::tab_header(
-    title = gt::md("**ANOVA Effects: Partial η² with 90% CI and p-values**"),
-    subtitle = "Design factors: treatment, n, prop_extreme, magnitude_level"
-  ) %>%
-  gt::tab_source_note("Signif.: *** < .001, ** < .01, * < .05, † < .10") %>%
-  gt::cols_align(align = "center", columns = c(`partial eta^2`, CI, `p-value`, sig))
-
-gt_partial
 ```  
 
 
