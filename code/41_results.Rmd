@@ -104,6 +104,27 @@ summ_att <- summ_grid |>
 # Helper for quantiles (same as before)
 q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
+tab_bias_all_descr <- all_df_gamma %>%
+  dplyr::summarise(
+    scenarios        = dplyr::n(),
+    mean_bias        = mean(bias, na.rm = TRUE),
+    sd_bias          = sd(bias, na.rm = TRUE),
+    median_bias      = median(bias, na.rm = TRUE),
+    mad_bias         = mad(bias, na.rm = TRUE),
+    min_bias         = min(bias, na.rm = TRUE),
+    q1_bias          = q_fun(bias, 0.25),
+    q3_bias          = q_fun(bias, 0.75),
+    iqr_bias         = q3_bias - q1_bias,
+    max_bias         = max(bias, na.rm = TRUE),
+    mean_abs_bias    = mean(abs(bias), na.rm = TRUE),
+    share_bias_neg   = mean(bias < 0, na.rm = TRUE),
+    share_bias_pos   = mean(bias > 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(tab_bias_all_descr)
+
+
 tab_bias_descr <- summ_gamma %>%
   dplyr::group_by(treatment) %>%
   dplyr::summarise(
@@ -885,13 +906,7 @@ cat(paste0("- ", sentences, collapse = "\n"))
 
 
 # Type III ANOVA with Eta² and Partial Eta² for Gamma Bias
-# Get summary statistics for all_df_gamma bias overall . 
-summary(all_df_gamma$bias)
-sd(all_df_gamma$bias, na.rm = TRUE)
-var(all_df_gamma$bias, na.rm = TRUE)
 
-# Plot distribution
-hist(all_df_gamma$bias, breaks = 100, main = "Distribution of Bias")
 
 # A) factorial ANOVA on gamma bias (at rep-level, per meeting with Tsai)
 # Load required packages
@@ -906,22 +921,6 @@ all_df_gamma <- all_df_gamma %>%
     magnitude_level = factor(magnitude_level)
   )
 
-
-# ============================================================
-# Type III ANOVA with Eta² and Partial Eta² for Gamma Bias
-# ============================================================
-
-# Load required packages
-pacman::p_load(car, effectsize, dplyr, tibble, knitr, kableExtra)
-
-# Ensure factors are properly set
-all_df_gamma <- all_df_gamma %>%
-  mutate(
-    treatment = factor(treatment),
-    n = factor(n),
-    prop_extreme = factor(prop_extreme),
-    magnitude_level = factor(magnitude_level)
-  )
 
 # Set contrasts for Type III SS (required!)
 options(contrasts = c("contr.sum", "contr.poly"))
@@ -1005,7 +1004,7 @@ print(combined_table)
 # ============================================================
 
 write.csv(combined_table, 
-          file = paste0("results/anova_type3_", dt, ".csv"),
+          here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
           row.names = FALSE)
 
 # ============================================================
@@ -1159,39 +1158,94 @@ cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
 library(ggplot2)
 
 # Plot partial eta² for significant effects
-plot_data <- combined_table %>%
+r# ============================================================
+# Step 9: Visualize Effect Sizes (CORRECTED)
+# ============================================================
+
+library(ggplot2)
+
+# Need to go back to BEFORE formatting p-values
+plot_data <- type3_df %>%
+  left_join(eta2_part_df, by = c("Term" = "Parameter")) %>%
   filter(Term != "(Intercept)") %>%
-  filter(`Pr(>F)` < 0.05 | `Pr(>F)` == "<.001") %>%
+  filter(`Pr(>F)` < 0.05) %>%  # Use numeric p-values BEFORE formatting
   mutate(
     Term = reorder(Term, Eta2_partial),
-    Significant = ifelse(`Pr(>F)` == "<.001" | 
-                        as.numeric(gsub("<.001", "0", `Pr(>F)`)) < 0.001,
-                        "p < .001", "p < .05")
+    Significant = case_when(
+      `Pr(>F)` < 0.001 ~ "p < .001",
+      `Pr(>F)` < 0.01 ~ "p < .01",
+      `Pr(>F)` < 0.05 ~ "p < .05",
+      TRUE ~ "ns"
+    )
   )
 
-p_effect_sizes <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+library(patchwork)  # For combining plots
+
+# Zoomed-in version (what you have now)
+p_zoomed <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
   geom_col() +
-  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.5) +
-  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.5) +
-  geom_vline(xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.5) +
-  scale_fill_manual(values = c("p < .001" = "steelblue", "p < .05" = "lightblue")) +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue", 
+               "p < .01" = "cornflowerblue",
+               "p < .05" = "lightblue"),
+    name = "Significance"
+  ) +
   labs(
-    title = "Partial Eta-Squared for Significant Effects",
-    subtitle = "Dashed lines: small (0.01), medium (0.06), large (0.14) benchmarks",
+    title = "A) Zoomed View",
     x = "Partial η²",
-    y = "Effect",
-    fill = "Significance"
+    y = "Effect"
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "none")
 
-print(p_effect_sizes)
+# Full scale version (shows context)
+p_full <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+  geom_col() +
+  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.7) +
+  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
+  geom_vline(xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.7) +
+  annotate("text", x = 0.01, y = 6.5, label = "Small", size = 3, color = "red") +
+  annotate("text", x = 0.06, y = 6.5, label = "Med", size = 3, color = "orange") +
+  annotate("text", x = 0.14, y = 6.5, label = "Large", size = 3, color = "green") +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue", 
+               "p < .01" = "cornflowerblue",
+               "p < .05" = "lightblue"),
+    name = "Significance"
+  ) +
+  scale_x_continuous(
+    limits = c(0, 0.15),
+    breaks = seq(0, 0.15, 0.03)
+  ) +
+  labs(
+    title = "B) Full Scale (with benchmarks)",
+    x = "Partial η²",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.y = element_blank()  # Remove duplicate y-axis labels
+  )
 
-ggsave(paste0("figures/effect_sizes_", dt, ".png"),
+# Combine side by side
+p_combined <- p_zoomed + p_full +
+  plot_annotation(
+    title = "Partial Eta-Squared for Significant Effects: Gamma Model Bias",
+    subtitle = "All effects are negligible - even the largest (0.0027) is far below the 'small' benchmark (0.01)",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 11, color = "gray30")
+    )
+  )
+
+print(p_combined)
+
+ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
+       p_combined, width = 14, height = 6, dpi = 300)
+
+ggsave(here::here(paste0("figures/effect_sizes_", dt, ".png")),
        p_effect_sizes, width = 10, height = 6, dpi = 300)
-
-cat("\n=== COMPLETE ===\n")
-cat("All results saved to results/ and figures/ directories.\n")
 
 
 ```    
