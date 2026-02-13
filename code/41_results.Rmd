@@ -86,8 +86,69 @@ summ_gamma <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS")) %>%
          everything())
 
 summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS"))
-all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS"))
-all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))
+
+# Can't do this on all_df and then subset there because that doesn't have cover_ind for some reason. Whatever. 
+all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>% 
+  mutate(
+    nobs_fct = factor(
+      nobs,
+      levels = c("5000","10000","20000"),
+      labels = c("5,000","10,000","20,000")),
+    prop_extreme_fct = factor(
+      prop_extreme,
+      levels = c("0.01","0.05","0.1"),
+      labels = c("1%", "5%", "10%")),
+    magnitude_fct = factor(
+      magnitude_level,
+      levels = c(1,2,3),
+      labels = c(1, 2, 3)),
+    treatment_fct = factor(
+      treatment,
+      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
+      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
+                 "Median-preserved top-coding", "Truncation"))
+    ) %>%
+  # mutate(
+  #   across(c(est, se, bias), ~round(.x, 4))) |> 
+  # just reorder and remove n
+  select(model, est, se, true, bias, 
+         nobs, nobs_fct, 
+         prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct,
+         treatment, treatment_fct,
+         cover_ind, gamma_shape,
+         everything())
+
+all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))%>% 
+  mutate(
+    nobs_fct = factor(
+      nobs,
+      levels = c("5000","10000","20000"),
+      labels = c("5,000","10,000","20,000")),
+    prop_extreme_fct = factor(
+      prop_extreme,
+      levels = c("0.01","0.05","0.1"),
+      labels = c("1%", "5%", "10%")),
+    magnitude_fct = factor(
+      magnitude_level,
+      levels = c(1,2,3),
+      labels = c(1, 2, 3)),
+    treatment_fct = factor(
+      treatment,
+      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
+      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
+                 "Median-preserved top-coding", "Truncation"))
+    ) %>%
+  # mutate(
+  #   across(c(est, se, bias), ~round(.x, 4))) |> 
+  # just reorder and remove n
+  select(model, est, se, true, bias, 
+         nobs, nobs_fct, 
+         prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct,
+         treatment, treatment_fct,
+         cover_ind, gamma_shape,
+         everything())
 
 summ_att <- summ_grid |> 
   filter(model=="ATT")
@@ -557,6 +618,9 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
        plot_trends, width = 11, height = 7, dpi = 300)
 ```
 
+## RQ2: Empirical SE  
+
+
 ```{r descr_empse}
 
 # ---- Empirical SE (overall) ----
@@ -667,7 +731,11 @@ compute_ESE_metrics <- function(df) {
     )
 }
 
-ese_results <- compute_ESE_metrics(all_df_gamma)
+ese_results <- compute_ESE_metrics(all_df_gamma) |> 
+  mutate(
+    
+  )
+fn_save_results(ese_results)
 
 ese_by_treatment <-  ese_results |>
   group_by(treatment) |>
@@ -685,6 +753,7 @@ ese_by_treatment <-  ese_results |>
 
     .groups = "drop"
   )
+fn_save_results(ese_by_treatment)
 
 ese_by_treatment_gt <- ese_by_treatment %>%
   dplyr::mutate(
@@ -715,6 +784,7 @@ ese_by_scenario <- ese_results |>
     .groups = "drop"
   )
 
+fn_save_results(ese_by_scenario)
 
 ```   
 
