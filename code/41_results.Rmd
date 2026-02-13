@@ -52,40 +52,9 @@ q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
 ```  
 
-```{r get_data}
+```{r get_data_alldf}
+
 all_df <- readRDS(here::here("results/all_df_2026-02-06.RDS"))
-
-summ_gamma <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS")) %>% 
-  mutate(
-    nobs_fct = factor(
-      nobs,
-      levels = c("5000","10000","20000"),
-      labels = c("5,000","10,000","20,000")),
-    prop_extreme_fct = factor(
-      prop_extreme,
-      levels = c("0.01","0.05","0.1"),
-      labels = c("1%", "5%", "10%")),
-    magnitude_fct = factor(
-      magnitude_level,
-      levels = c(1,2,3),
-      labels = c(1, 2, 3)),
-    treatment_fct = factor(
-      treatment,
-      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
-      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
-                 "Median-preserved top-coding", "Truncation"))
-    ) %>%
-  mutate(
-    across(c(mean_est, bias, emp_se, rmse, coverage), ~round(.x, 4))) |> 
-  # just reorder and remove n
-  select(design_id, n_design, model, 
-         nobs, nobs_fct, 
-         prop_extreme, prop_extreme_fct,
-         magnitude_level, magnitude_fct,
-         treatment, treatment_fct,
-         everything())
-
-summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS"))
 
 # Can't do this on all_df and then subset there because that doesn't have cover_ind for some reason. Whatever. 
 all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>% 
@@ -119,7 +88,9 @@ all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>%
          cover_ind, gamma_shape,
          everything())
 
-all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))%>% 
+all_df_att <- readRDS(here::here("results/all_df_att_2026-02-09.RDS")) %>% 
+  mutate(n=as.numeric(as.character(n))) |> 
+  mutate(nobs=n*2) |> 
   mutate(
     nobs_fct = factor(
       nobs,
@@ -141,18 +112,68 @@ all_df_att   <- readRDS(here::here("results/all_df_att_2026-02-09.RDS"))%>%
     ) %>%
   # mutate(
   #   across(c(est, se, bias), ~round(.x, 4))) |> 
+  select(-c(se, d_est, d_true, d_bias, n, gamma_shape)) |> 
   # just reorder and remove n
-  select(model, est, se, true, bias, 
+  select(model, est, true, bias, 
          nobs, nobs_fct, 
          prop_extreme, prop_extreme_fct,
          magnitude_level, magnitude_fct,
          treatment, treatment_fct,
-         cover_ind, gamma_shape,
-         everything())
+         everything()) 
+
+```  
+
+```{r get_summ_grid}
+
+# Get design id and n_design from summ_gamma 
+design_elements <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS")) |> 
+  select(
+    n, nobs, prop_extreme, magnitude_level, treatment, design_id, n_design) |> 
+  # won't join if you don't change this back to character.
+  mutate(treatment=as.character(treatment))
+  
+summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS")) |> 
+  left_join(
+    design_elements, 
+    by = c("treatment", "n", "prop_extreme", "magnitude_level")) |> 
+  mutate(
+    nobs=n*2,
+    nobs_fct = factor(
+      nobs,
+      levels = c("5000","10000","20000"),
+      labels = c("5,000","10,000","20,000")),
+    prop_extreme_fct = factor(
+      prop_extreme,
+      levels = c("0.01","0.05","0.1"),
+      labels = c("1%", "5%", "10%")),
+    magnitude_fct = factor(
+      magnitude_level,
+      levels = c(1,2,3),
+      labels = c(1, 2, 3)),
+    treatment_fct = factor(
+      treatment,
+      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
+      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
+                 "Median-preserved top-coding", "Truncation"))
+    ) %>%
+  # mutate(
+  #   across(c(mean_est, bias, emp_se, rmse, coverage), ~round(.x, 4))) |> 
+  # just reorder and remove n
+  select(design_id, n_design, model, 
+         nobs, nobs_fct, 
+         prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct,
+         treatment, treatment_fct,
+         everything()) |> 
+  select(-c(d_mean, d_bias, d_emp_se, n))
+
+summ_gamma <- summ_grid |> 
+  filter(model == "gamma") 
 
 summ_att <- summ_grid |> 
   filter(model=="ATT")
-```  
+```
+
 
 ```{r}
 # checking for balance
@@ -623,83 +644,10 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 
 ```{r descr_empse}
 
-# ---- Empirical SE (overall) ----
-# tab_gamma_empse_overall <- summ_gamma %>%
-#   dplyr::group_by(treatment) %>%
-#   dplyr::summarise(
-#     scenarios   = dplyr::n(),
-#     mean_emp_se = mean(emp_se, na.rm = TRUE),
-#     sd_emp_se   = sd(emp_se, na.rm = TRUE),
-#     .groups = "drop"
-#   )
-# 
-# gt_gamma_empse_overall <- tab_gamma_empse_overall %>%
-#   dplyr::mutate(
-#     mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001),
-#     sd_emp_se   = scales::number(sd_emp_se, accuracy = 0.0001)
-#   ) %>%
-#   gt::gt() %>%
-#   gt::tab_header(
-#     title = "Gamma Interaction — Descriptive Statistics: Empirical SE (All Scenarios)",
-#     subtitle = "Empirical SE = Monte Carlo SD of the estimator across replications"
-#   ) %>%
-#   gt::tab_options(data_row.padding = gt::px(1))
-
-# Helper to get quantiles safely
-# q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
-# 
-# tab_empse <- summ_gamma %>%
-#   dplyr::group_by(treatment) %>%
-#   dplyr::summarise(
-#     scenarios       = dplyr::n(),
-#     mean_emp_se     = mean(emp_se, na.rm = TRUE),
-#     sd_emp_se       = sd(emp_se, na.rm = TRUE),
-#     median_emp_se   = median(emp_se, na.rm = TRUE),
-#     mad_emp_se      = mad(emp_se, na.rm = TRUE),
-#     min_emp_se      = min(emp_se, na.rm = TRUE),
-#     q1_emp_se       = q_fun(emp_se, 0.25),
-#     q3_emp_se       = q_fun(emp_se, 0.75),
-#     iqr_emp_se      = q3_emp_se - q1_emp_se,
-#     max_emp_se      = max(emp_se, na.rm = TRUE),
-#     .groups = "drop"
-#   )
-# 
-# gt_empse <- tab_empse %>%
-#   dplyr::mutate(
-#     dplyr::across(
-#       c(mean_emp_se, sd_emp_se, median_emp_se, mad_emp_se,
-#         min_emp_se, q1_emp_se, q3_emp_se, iqr_emp_se, max_emp_se),
-#       ~ scales::number(.x, accuracy = 0.0001)
-#     )
-#   ) %>%
-#   gt::gt() %>%
-#   gt::tab_header(
-#     title = "Gamma Interaction — Full Descriptive Statistics: Empirical SE",
-#     subtitle = "Scenario-level empirical SE (Monte Carlo SD of the estimator) summarised across scenarios by treatment"
-#   ) %>%
-#   gt::cols_label(
-#     scenarios = "N scenarios",
-#     mean_emp_se = "Mean",
-#     sd_emp_se = "SD",
-#     median_emp_se = "Median",
-#     mad_emp_se = "MAD",
-#     min_emp_se = "Min",
-#     q1_emp_se = "Q1",
-#     q3_emp_se = "Q3",
-#     iqr_emp_se = "IQR",
-#     max_emp_se = "Max"
-#   ) %>%
-#   gt::tab_options(data_row.padding = gt::px(1))
-# 
-# gt_empse_full_overall |> 
-#   gtsave(
-#     here::here("results/tbl_empse_descr.rtf")
-#   )
-
 compute_ESE_metrics <- function(df) {
 
   df |>
-    group_by(treatment, nobs, prop_extreme, magnitude_level) |>
+    group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
     summarise(
       # Empirical standard error
       ese = sd(est, na.rm = TRUE),
@@ -731,14 +679,13 @@ compute_ESE_metrics <- function(df) {
     )
 }
 
-ese_results <- compute_ESE_metrics(all_df_gamma) |> 
-  mutate(
-    
-  )
+ese_results <- compute_ESE_metrics(all_df_gamma) 
+# N=135 (all scenarios*treatment)
+
 fn_save_results(ese_results)
 
 ese_by_treatment <-  ese_results |>
-  group_by(treatment) |>
+  group_by(treatment_fct) |>
   summarise(
     mean_ese = mean(ese),
     median_ese = median(ese),
@@ -768,7 +715,7 @@ ese_by_treatment_gt
 
 
 ese_by_scenario <- ese_results |>
-  group_by(nobs, prop_extreme, magnitude_level) |>
+  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
   summarise(
     mean_ese = mean(ese),
     median_ese = median(ese),
@@ -786,7 +733,69 @@ ese_by_scenario <- ese_results |>
 
 fn_save_results(ese_by_scenario)
 
-```   
+```    
+
+```{r ese_plots}
+
+prep_plot_ese <- ese_results |>
+  mutate(
+    scenario = glue("p={prop_extreme_fct}, n={nobs_fct}, m={magnitude_fct}"),
+    scenario = factor(scenario)
+  ) |>
+  arrange(nobs_fct, prop_extreme_fct, desc(magnitude_fct), treatment_fct)
+
+x_min <- min(prep_plot_ese$ese, na.rm = TRUE)
+x_max <- max(prep_plot_ese$ese, na.rm = TRUE)
+
+plots_ese <- prep_plot_ese |>
+  mutate(
+    color_flag = ifelse(ese > 0.25, "high", "low")
+  ) |>
+  group_split(treatment_fct) |>
+  map(~ {
+    trt <- unique(.x$treatment_fct)
+
+    ggplot(.x, aes(x = ese, y = scenario)) +
+      geom_segment(
+        aes(x = 0, xend = ese, y = scenario, yend = scenario),
+        linewidth = 0.6,
+        color = "grey80"
+      ) +
+      geom_point(
+        aes(color = color_flag),
+        size = 2
+      ) +
+      scale_color_manual(
+        values = c(
+          "high" = "red",
+          "low"  = "grey40"
+        ),
+        guide = "none"
+      ) +
+      scale_x_continuous(limits = c(x_min, x_max)) +
+      labs(
+        x = "Empirical SE",
+        y = "Scenario (prop_extreme, nobs, magnitude_level)",
+        title = paste("Lollipop Chart of Empirical SE — Treatment:", trt)
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_text(size = 10),
+        plot.title = element_text(face = "bold"),
+        axis.title.y = element_blank()
+      )
+  })
+
+plots_ese[[1]]
+plots_ese[[2]]
+plots_ese[[3]]
+plots_ese[[4]]
+plots_ese[[5]]
+
+```
+
 
 ```{r}
 # ---- Coverage (overall) ----
