@@ -794,7 +794,27 @@ plots_ese[[3]]
 plots_ese[[4]]
 plots_ese[[5]]
 
+```  
+
+```{r ese_ggridge}
+library(ggridges)
+
+ggplot(ese_results,
+       aes(x = ese, y = treatment_fct, fill = treatment_fct)) +
+  geom_density_ridges(alpha = 0.7) +
+  facet_grid(prop_extreme_fct ~ magnitude_fct + nobs_fct,
+             labeller = label_both) +
+  labs(
+    title = "Empirical SE Distributions by Treatment",
+    x = "Empirical SE",
+    y = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(face = "bold"),
+        legend.position = "none")
+
 ```
+
 
 
 ```{r}
@@ -1032,12 +1052,11 @@ all_df_gamma <- all_df_gamma %>%
   )
 
 
-# Set contrasts for Type III SS (required!)
+# Set contrasts for Type III SS (m!)
 options(contrasts = c("contr.sum", "contr.poly"))
 
-# ============================================================
-# Step 1: Fit the model
-# ============================================================
+
+# 1: Fit the model
 
 model <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
              data = all_df_gamma)
@@ -1045,23 +1064,14 @@ model <- aov(bias ~ treatment * n * prop_extreme * magnitude_level,
 # model_lm<-lm(bias ~ treatment * n * prop_extreme * magnitude_level,
 #              data = all_df_gamma)
 
-# trying it with summ_gamma?
-model2 <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
-             data = summ_gamma)
-model2_aov_t3 <- car::Anova(model2, type=3)
 
-
-# ============================================================
 # Step 2: Type III Sum of Squares ANOVA Table
-# ============================================================
-
 type3_anova <- car::Anova(model, type = "III")
-type3_anova_lm <- car::Anova(model_lm, type = "III") # same as aov above
-print(type3_anova)
 
-# ============================================================
+# 
 # Step 3: Effect Sizes (Both Eta² and Partial Eta²)
-# ============================================================
+# Trying multiple packages to see what we get
+# 
 
 # Get regular eta²
 eta2_regular <- effectsize::eta_squared(model, 
