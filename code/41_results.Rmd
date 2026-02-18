@@ -89,8 +89,11 @@ all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>%
          everything())
 
 all_df_att <- readRDS(here::here("results/all_df_att_2026-02-09.RDS")) %>% 
+  # remove the ones that are NA
+  filter(!is.na(est)) |> 
   mutate(n=as.numeric(as.character(n))) |> 
   mutate(nobs=n*2) |> 
+  mutate(abs_bias = abs(bias)) |> 
   mutate(
     nobs_fct = factor(
       nobs,
@@ -114,7 +117,7 @@ all_df_att <- readRDS(here::here("results/all_df_att_2026-02-09.RDS")) %>%
   #   across(c(est, se, bias), ~round(.x, 4))) |> 
   select(-c(se, d_est, d_true, d_bias, n, gamma_shape)) |> 
   # just reorder and remove n
-  select(model, est, true, bias, 
+  select(model, est, true, bias, abs_bias,
          nobs, nobs_fct, 
          prop_extreme, prop_extreme_fct,
          magnitude_level, magnitude_fct,
@@ -165,13 +168,20 @@ summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS")) |>
          magnitude_level, magnitude_fct,
          treatment, treatment_fct,
          everything()) |> 
-  select(-c(d_mean, d_bias, d_emp_se, n))
+  select(-c(d_mean, d_bias, d_emp_se, n)) |> 
+  mutate(
+    scen_id = paste0(
+      "prop=", prop_extreme_fct, " | mag=", magnitude_fct, " | n=", nobs_fct),
+    abs_bias = abs(bias)
+  )
 
 summ_gamma <- summ_grid |> 
   filter(model == "gamma") 
 
-summ_att <- summ_grid |> 
-  filter(model=="ATT")
+# Make your own for this because you need abs_bias from all_df_att
+# summ_att <- summ_grid |> 
+#   filter(model=="ATT") 
+  
 ```
 
 
@@ -200,7 +210,7 @@ all_df_gamma |>
 # The mean_abs_bias is the average absolute magnitude of the bias, which measures how far the estimator is from the truth on average. Does not allow pos/neg to cancel each other out. Always >=0. Larger values indicate more inconsistent or unstable estimation. 
 # Mean_abs_bias captures estimator error magnitude, while mean_bias captures estimator direction. mean_bias answers if treatment method systematically over or under estimates the effect, while mean_abs_bias answers how large are the estimation errors, regardless of direction. A method an have a mean bias of 0 and look good but actually perform poorly when you see a large mean_abs_bias because that means it swings pos in some directions, negative in others. 
 
-tab_bias_all_descr <- all_df_gamma %>%
+tbl_bias_overall <- all_df_gamma %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
@@ -218,11 +228,10 @@ tab_bias_all_descr <- all_df_gamma %>%
     .groups = "drop"
   )
 
-print(tab_bias_all_descr)
+print(tbl_bias_overall)
 
-
-tab_bias_descr <- summ_gamma %>%
-  dplyr::group_by(treatment) %>%
+tbl_bias_treatment <- all_df_gamma %>%
+  dplyr::group_by(treatment_fct) %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
@@ -239,8 +248,9 @@ tab_bias_descr <- summ_gamma %>%
     share_bias_pos   = mean(bias > 0, na.rm = TRUE),
     .groups = "drop"
   )
+print(tbl_bias_treatment)
 
-gt_bias_descr <- tab_bias_descr %>%
+gt_bias_treatment <- tbl_bias_treatment %>%
   dplyr::mutate(
     dplyr::across(
       c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, 
@@ -272,24 +282,16 @@ gt_bias_descr <- tab_bias_descr %>%
   ) %>%
   gt::tab_options(data_row.padding = gt::px(1))
 
-gtsave(gt_bias_descr, here::here("results/tbl_bias_descr.rtf"))
+gtsave(gt_bias_treatment, here::here("results/tbl_bias_treatment.rtf"))
 
-gt_bias_full_overall
-
-tbl_bias_summ <- summ_gamma |> 
-  select(design_id, nobs_fct, prop_extreme_fct, magnitude_fct, 
-         treatment_fct, bias) |> 
-  mutate(over_under = ifelse(bias>0, "Over","Under"))
-
-fn_save_results(tbl_bias_summ)
 ```  
 
 ## Over/under estimation  
 
 ```{r over_underests}
 # Replicate-level indicator of underestimation for gamma model
-under_over_scen <- all_df_gamma %>%
-  group_by(treatment, nobs, prop_extreme, magnitude_level) %>%
+tbl_bias_UnderOver_scen <- all_df_gamma %>%
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
   summarise(
     n_under = sum(est < true, na.rm = TRUE), # count of underestimates 
     n_over = sum(est > true, na.rm = TRUE),
@@ -303,49 +305,28 @@ under_over_scen <- all_df_gamma %>%
     pct_over = scales::percent(over_rate, accuracy = 0.1)
   ) |> 
   ungroup() |> 
-  select(treatment, n_design, nobs, prop_extreme, magnitude_level, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
+  select(treatment_fct, n_design, nobs_fct, prop_extreme_fct, magnitude_fct, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
   mutate(
      # 'consistently under' if majority of reps are < 0 bias in that scenario
     under_majority = under_rate > 0.5,
     over_majority  = over_rate > 0.5
-  ) |>
-  mutate(
-    prop_extreme = as.numeric(prop_extreme),
-    magnitude_level = as.numeric(magnitude_level),
-    treatment = as.character(treatment)
   )
 
-under_over_scen |> 
-  arrange(nobs, prop_extreme, magnitude_level, treatment) |> 
-  mutate(
-    treatment = factor(
-      treatment,
-      levels = c("raw","topcode","mean_adj","median_adj","truncate"),
-      labels = c("Raw","Top-coding", "Mean-preserved top-coding", "Median-preserved top-coding","Truncation"))
-    ) |> 
+tbl_bias_UnderOver_scen |> 
+  arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) |> 
   select(-c(under_rate, over_rate)) |> 
   gt() |> 
   gt::gtsave(
     here::here("results/tbl_over_under_scen.rtf")
 )
 
-
 # Aggregate to treatment-level “consistency” table
 tab_consistency <- summ_gamma |>
-  mutate(
-    treatment = as.character(treatment)) |>
   left_join( 
-    under_over_scen |> 
-      mutate(prop_extreme = 
-               case_when(prop_extreme == 1 ~ 0.01,
-                         prop_extreme == 2 ~ 0.05,
-                         prop_extreme == 3 ~ 0.10)),
-    by = c("treatment",
-      "nobs", 
-      "prop_extreme",
-      "magnitude_level")
+    tbl_bias_UnderOver_scen,
+    by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
     ) |>
-  group_by(treatment) %>%
+  group_by(treatment_fct) %>%
   summarise(
     n_scen = dplyr::n(),
     
@@ -362,33 +343,11 @@ tab_consistency <- summ_gamma |>
     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
     .groups = "drop"
   )
-
-gt_consistency <- tab_consistency %>%
-  mutate(
-    share_scen_under = scales::percent(share_scen_under, accuracy = 0.1),
-    share_scen_over  = scales::percent(share_scen_over, accuracy = 0.1),
-    share_scen_under_majority = scales::percent(
-      share_scen_under_majority, accuracy = 0.1)
-   #  mean_cov = scales::percent(mean_cov, accuracy = 0.1),
-    # mean_emp_se = scales::number(mean_emp_se, accuracy = 0.0001)
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction: Consistency of Under/Over-Estimation by Treatment",
-    subtitle = "Share of scenarios with negative mean bias and with majority underestimation"
-  )
-
-gt_consistency
-
-gt::gtsave(
-  gt_consistency,
-    here::here("results/tbl_over_under_tx.rtf")
-)
 ```    
 
 ```{r bias_by_scen}
-scenario_summary <- under_over_scen |>
-  group_by(nobs, prop_extreme, magnitude_level) |>
+scenario_summary <- tbl_bias_UnderOver_scen |>
+  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
   summarise(
     n_treatments = n(),   # should equal number of treatments
 
@@ -408,8 +367,8 @@ scenario_summary <- under_over_scen |>
     .groups = "drop"
   )
 
-scenario_summary |> 
-  gt() |> 
+scenario_summary |>
+  gt() |>
   gtsave(
     here::here("results/tbl_over_under_scen_summary.rtf")
   )
@@ -426,21 +385,10 @@ scenario_summary |>
 
 prep_plot_bias_over_under <- summ_gamma |>
   left_join(
-    under_over_scen |>
-      mutate(
-        prop_extreme = case_when(
-          prop_extreme == 1 ~ 0.01,
-          prop_extreme == 2 ~ 0.05,
-          prop_extreme == 3 ~ 0.10
-        )
-      ),
-    by = c("treatment", "nobs", "prop_extreme", "magnitude_level")
+    tbl_bias_UnderOver_scen,
+    by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
   ) |>
   mutate(
-    nobs = factor(nobs, levels = c(5000, 10000, 20000)),
-    prop_extreme = factor(prop_extreme, levels = c(0.01, 0.05, 0.10)),
-    magnitude_level = factor(magnitude_level, levels = c(1, 2, 3)),
-    treatment = factor(treatment),
     scenario = glue::glue("p={prop_extreme}, n={nobs}, m={magnitude_level}")
   ) |>
   arrange(nobs, prop_extreme, magnitude_level, treatment) |>
@@ -451,11 +399,9 @@ prep_plot_bias_over_under <- summ_gamma |>
 x_min <- min(prep_plot_bias_over_under$bias, na.rm = TRUE) # -0.024372
 x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.10535
 
-
-
 # table 
 tab_27 <- prep_plot_bias_over_under |>
-  group_by(treatment) |>
+  group_by(treatment_fct) |>
   summarise(
     n_scen = n(),   # should be 27
 
@@ -480,71 +426,66 @@ tab_27 |>
   gt() |> 
   gtsave(here::here("results/tab_27.rtf"))
 
-
 plots_bias <- prep_plot_bias_over_under |> 
-  group_split(treatment) |> 
-  map(~ { trt <- unique(.x$treatment) 
-  ggplot(.x, aes(x = bias, y = scenario)) + 
-    geom_segment(
-      aes(x = 0, xend = bias, y = scenario, yend = scenario), 
-      linewidth = 0.6, color = "grey60") + 
-    geom_point(size = 3, color = "steelblue") + 
-    scale_x_continuous(limits = c(x_min, x_max)) + 
-    labs( x = "Bias", y = "Scenario (prop_extreme, nobs, magnitude_level)", 
-          title = paste("Lollipop Chart of Bias — Treatment:", trt) ) +
-    theme_minimal(base_size = 13) + 
-    theme( panel.grid.major.y = element_blank(), 
-           panel.grid.minor = element_blank(), 
-           axis.text.y = element_text(size = 10), 
-           plot.title = element_text(face = "bold"), 
-           axis.title.y = element_blank() ) }
-  )
+  group_split(treatment_fct) |> 
+  map(~ { 
+    trt <- unique(.x$treatment_fct)
 
+    ggplot(.x, aes(x = bias, y = scenario)) +
+      geom_segment(
+        aes(x = 0, xend = bias, y = scenario, yend = scenario),
+        linewidth = 0.6, color = "grey60"
+      ) +
+      geom_point(
+        aes(color = abs(bias) > 0.04),
+        size = 2
+      ) +
+      scale_color_manual(
+        values = c(`TRUE` = "red", `FALSE` = "steelblue"),
+        guide = "none"
+      ) +
+      scale_x_continuous(limits = c(x_min, x_max)) +
+      labs(
+        x = "Bias",
+        y = "Scenario (prop_extreme, nobs, magnitude_level)",
+        title = paste("Bias — Treatment:", trt),
+        subtitle = "Values >|0.04| are red"
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_blank(),
+        plot.title = element_text(face = "bold", hjust = 0),
+        plot.title.position = "plot"   # left-align title with y-axis
+      )
+  })
 
 plots_bias[[1]]
 plots_bias
-
-# df_plot |>
-#   group_split(treatment) |>
-#   walk(~ {
-#     trt <- unique(.x$treatment)
-# 
-#     p <- ggplot(.x, aes(x = scenario, y = bias)) +
-#       geom_segment(aes(x = scenario, xend = scenario, y = 0, yend = bias),
-#                    linewidth = 0.6, color = "grey60") +
-#       geom_point(size = 3, color = "steelblue") +
-#       labs(
-#         x = "Scenario",
-#         y = "Bias",
-#         title = glue::glue("Bias Across Scenarios — Treatment: {trt}")
-#       ) +
-#       theme_minimal(base_size = 13) +
-#       theme(
-#         panel.grid.major.x = element_blank(),
-#         axis.text.x = element_text(size = 9, angle = 45, hjust = 1)
-#       )
-# 
-#     print(p)
-#   })
-
-
 ```
 
 
 ```{r plots_dir}
 
-plot_bias_lollipop <- scenario_stats %>%
-  group_by(treatment) %>%
+#plot_bias_lollipop <- scenario_stats %>%
+prep_plot_bias_lollipop <- tbl_bias_summ %>%
+  group_by(treatment_fct) %>%
   summarise(
     mean_of_means = mean(bias, na.rm = TRUE),
     sd_of_means   = sd(bias, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  mutate(sign = ifelse(mean_of_means < 0, "Underestimation (−)", "Overestimation (+)"),
-         treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate")) %>%
-  ggplot(aes(x = treatment, y = mean_of_means, color = sign)) +
+  mutate(
+    sign = ifelse(
+      mean_of_means < 0, "Underestimation (−)", "Overestimation (+)")) 
+  
+plot_bias_lollipop <- prep_plot_bias_lollipop |> 
+  ggplot(aes(x = treatment_fct, y = mean_of_means, color = sign)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_segment(aes(xend = treatment, y = 0, yend = mean_of_means), linewidth = 1.2) +
+  geom_segment(
+    aes(xend = treatment_fct, y = 0, yend = mean_of_means), linewidth = 1.2) +
   geom_point(size = 3) +
   scale_color_manual(values = c("Underestimation (−)" = "#C7372F", "Overestimation (+)" = "#2B6CB0")) +
   labs(
@@ -563,14 +504,14 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 ### lollipop x2  
 ```{r lolli_v2}
 # Reuse your scenario-level summary table for the Gamma interaction
-summ_gamma <- summ_grid %>%
-  dplyr::filter(model == "gamma") %>%
+summ_gamma <- summ_gamma %>%
   dplyr::mutate(
-    treatment = forcats::fct_relevel(
-      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
-    ),
+  #   treatment = forcats::fct_relevel(
+  #     treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
+  #   ),
     # scenario id string and absolute bias to plot
-    scen_id = paste0("prop=", prop_extreme, " | mag=", magnitude_level, " | n=", n),
+    scen_id = paste0(
+      "prop=", prop_extreme_fct, " | mag=", magnitude_fct, " | n=", nobs_fct),
     abs_bias = abs(bias)
   )
 
@@ -820,136 +761,179 @@ ggplot(ese_results,
 ```{r}
 # ---- Coverage (overall) ----
 
+# All 135 treatment*conditions
 cov_grid <- all_df_gamma %>%
-  group_by(treatment, n, prop_extreme, magnitude_level) %>%
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
   summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
 
 fn_save_results(cov_grid)
 
-tab_gamma_cov_overall <- summ_gamma %>%
-  dplyr::group_by(treatment) %>%
-  dplyr::summarise(
-    scenarios       = dplyr::n(),
-    mean_cov        = mean(coverage, na.rm = TRUE),
+# 5 treatments
+tab_cov_treatment <- summ_gamma |>
+  group_by(treatment_fct) |>
+  summarise(
+    scenarios = dplyr::n(),
+    mean_cov = mean(coverage, na.rm = TRUE),
+    sd_cov = sd(coverage, na.rm = TRUE),
+    median_cov = median(coverage, na.rm = TRUE),
+    mad_cov = mad(coverage, na.rm = TRUE),
+    min_cov = min(coverage, na.rm = TRUE),
+    # q1_cov = quantile(coverage, 0.25, na.rm = TRUE),
+    # q3_cov = quantile(coverage, 0.75, na.rm = TRUE),
+    # iqr_cov = q3_cov - q1_cov,
+    max_cov = max(coverage, na.rm = TRUE),
+    n_below_95 = sum(coverage < 0.95),
+    prop_below_95 = mean(coverage < 0.95),
+    .groups = "drop"
+  )
+write.csv(
+  tab_cov_treatment,
+  here::here("results/tab_cov_treatment_2026-02-17.csv")
+)
+
+# coverage by scenarios (N=27)
+tab_cov_scenario <- summ_gamma |>
+  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  summarise(
+    scenarios = dplyr::n(),
+    mean_cov = mean(coverage),
+    min_cov = min(coverage),
+    max_cov = max(coverage),
+    n_cov_below_95  = sum(if_else(coverage<0.95,1,0)),
     p_cov_below_95  = mean(coverage < 0.95, na.rm = TRUE),
+    n_cov_ge_95     = sum(if_else(coverage>=0.95, 1, 0)),
+    p_cov_ge_95     = mean(coverage >= 0.95, na.rm=TRUE),
+    .groups = "drop"
+  )
+write.csv(
+  tab_cov_scenario,
+  here::here("results/tab_cov_scenario_2026-02-17.csv")
+)
+
+# Pass/fail table
+tab_cov_passfail <- summ_gamma |>
+  group_by(treatment_fct) |>
+  summarise(
+    scenarios = dplyr::n(),
+    n_pass = sum(coverage >= 0.95),
+    n_fail = sum(coverage < 0.95),
+    prop_pass = mean(coverage >= 0.95),
+    prop_fail = mean(coverage < 0.95),
     .groups = "drop"
   )
 
-gt_gamma_cov_overall <- tab_gamma_cov_overall %>%
-  dplyr::mutate(
-    mean_cov       = scales::percent(mean_cov, accuracy = 0.1),
-    p_cov_below_95 = scales::percent(p_cov_below_95, accuracy = 0.1)
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction — Descriptive Statistics: Coverage (All Scenarios)",
-    subtitle = "Nominal = 95%; table reports mean coverage and share of scenarios < 95%"
-  ) %>%
-  gt::tab_options(data_row.padding = gt::px(1))
+# reshape to long format for plotting
+df_long <- tab_cov_passfail |> 
+  select(treatment_fct, prop_pass, prop_fail) |> 
+  pivot_longer( 
+    cols = c(prop_pass, prop_fail), 
+    names_to = "status", values_to = "prop" ) |> 
+  mutate( status = factor( 
+    status, 
+    levels = c("prop_pass", "prop_fail"), 
+    labels = c("Pass (≥95%)", "Fail (<95%)") ), 
+    label = scales::percent(prop, accuracy = 1) )
 
-# Stratified tables by prop_extreme * n * magnitude level 
-# A tiny formatter for numeric columns
-num4 <- function(x) scales::number(x, accuracy = 0.0001)
+df_plot <- ggplot(
+  df_long, 
+  aes(x = treatment_fct, y = prop, fill = status)) + 
+  geom_col(width = 0.7, color = "white") + 
+  geom_text( aes(label = label), 
+             position = position_stack(vjust = 0.5), 
+             color = "white", size = 4.2 ) + 
+  scale_fill_manual(
+    values = c("Pass (≥95%)" = "steelblue", "Fail (<95%)" = "firebrick")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) + 
+  labs( title = "Coverage Performance by Treatment", 
+        subtitle = "Percent of scenarios meeting nominal 95% coverage", 
+        x = "Treatment", 
+        y = "Proportion of Scenarios", 
+        fill = "Coverage Status" ) + 
+  theme_minimal(base_size = 13) + 
+  theme( axis.text.x = element_text(angle = 25, hjust = 1), 
+         plot.title = element_text(face = "bold") )
 
-tab_cov_full_overall <- summ_gamma %>%
-  dplyr::group_by(treatment) %>%
-  dplyr::summarise(
-    scenarios         = dplyr::n(),
-    mean_cov          = mean(coverage, na.rm = TRUE),
-    sd_cov            = sd(coverage, na.rm = TRUE),
-    median_cov        = median(coverage, na.rm = TRUE),
-    mad_cov           = mad(coverage, na.rm = TRUE),
-    min_cov           = min(coverage, na.rm = TRUE),
-    q1_cov            = q_fun(coverage, 0.25),
-    q3_cov            = q_fun(coverage, 0.75),
-    iqr_cov           = q3_cov - q1_cov,
-    max_cov           = max(coverage, na.rm = TRUE),
-    # policy-relevant shares around nominal 0.95
-    p_cov_below_95    = mean(coverage < 0.95, na.rm = TRUE),
-    p_cov_ge_95       = mean(coverage >= 0.95, na.rm = TRUE),
-    .groups = "drop"
+# Line plot for means by scenario: 
+
+cov_mean_plot <- tab_cov_scenario |>
+  mutate(
+    status = ifelse(mean_cov >= 0.95, "≥95%", "<95%"),
+    status = factor(status, levels = c("<95%", "≥95%"))
   )
 
-gt_cov_full_overall <- tab_cov_full_overall %>%
-  dplyr::mutate(
-    # format coverage fields as percents where appropriate
-    dplyr::across(
-      c(mean_cov, sd_cov, median_cov, mad_cov, min_cov, q1_cov, q3_cov, iqr_cov, max_cov),
-      ~ scales::percent(.x, accuracy = 0.1)
+ggplot(cov_mean_plot, 
+       aes(x = magnitude_fct, y = mean_cov, color = status)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("<95%" = "firebrick", "≥95%" = "steelblue")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  facet_grid(nobs_fct ~ prop_extreme_fct) +
+  labs(
+    title = "Mean Coverage Across Scenarios",
+    x = "Magnitude",
+    y = "Mean Coverage",
+    color = "Coverage Status"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+
+
+
+cov_plot_scen_prep <- cov_mean_plot |> 
+  select(
+    nobs_fct, prop_extreme_fct, magnitude_fct, p_cov_below_95, p_cov_ge_95
+  ) |> 
+  pivot_longer(
+    cols = c(p_cov_ge_95, p_cov_below_95), 
+    names_to = "status", values_to = "prop"
+  ) |> 
+  mutate(
+    status = factor(
+      status,
+      levels = c("p_cov_below_95", "p_cov_ge_95"),
+      labels = c("Fail (<95%)", "Pass (>=95%)")
     ),
-    p_cov_below_95 = scales::percent(p_cov_below_95, accuracy = 0.1),
-    p_cov_ge_95    = scales::percent(p_cov_ge_95, accuracy = 0.1)
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction — Full Descriptive Statistics: Coverage",
-    subtitle = "Scenario-level coverage summarised across scenarios by treatment (nominal: 95%)"
-  ) %>%
-  gt::cols_label(
-    scenarios = "N scenarios",
-    mean_cov = "Mean",
-    sd_cov = "SD",
-    median_cov = "Median",
-    mad_cov = "MAD",
-    min_cov = "Min",
-    q1_cov = "Q1",
-    q3_cov = "Q3",
-    iqr_cov = "IQR",
-    max_cov = "Max",
-    p_cov_below_95 = "Share < 95%",
-    p_cov_ge_95    = "Share ≥ 95%"
-  ) %>%
-  gt::tab_options(data_row.padding = gt::px(1))
-
-gt_cov_full_overall
-
-# Factory that returns a gt table for a given data frame + header labels
-make_gt_table <- function(df, title, subtitle) {
-  gt::gt(df) |>
-    gt::tab_header(title = title, subtitle = subtitle) |>
-    gt::tab_options(data_row.padding = gt::px(1))
-}
-
-num4 <- function(x) scales::number(x, accuracy = 0.0001)
-
-
-tab_bias_stratified <- all_df_gamma %>%
-  dplyr::group_by(treatment, prop_extreme, nobs, magnitude_level) %>%
-  dplyr::summarise(
-    scenarios      = dplyr::n(),
-    mean_bias      = mean(bias, na.rm = TRUE),
-    median_bias    = median(bias, na.rm = TRUE),
-    mad_bias       = mad(bias, na.rm = TRUE),
-    mean_abs_bias  = mean(abs(bias), na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    mean_bias     = num4(mean_bias),
-    median_bias   = num4(median_bias),
-    mad_bias      = num4(mad_bias),
-    mean_abs_bias = num4(mean_abs_bias)
+    label = scales::percent(prop, accuracy = 1)
   )
 
-bias_tables_by_treatment <- tab_bias_stratified %>%
-  dplyr::group_split(treatment)
-
-gt_bias_by_treatment <- lapply(bias_tables_by_treatment, function(df) {
-  trt <- df$treatment[1]
-
-  make_gt_table(
-    df %>% dplyr::select(-treatment),
-    title = glue::glue("Gamma Interaction — Bias (All Scenarios)"),
-    subtitle = glue::glue("Treatment = {trt}")
+cov_plot_scen_prep <- cov_plot_scen_prep |>
+  mutate(
+    status = forcats::fct_relevel(
+      status,"Pass (>=95%)", "Fail (<95%)")
   )
-})
 
-for (i in seq_along(gt_bias_by_treatment)) { 
-  trt <- unique(bias_tables_by_treatment[[i]]$treatment) 
-  
-  gt::gtsave( 
-    gt_bias_by_treatment[[i]], 
-    filename = here::here(paste0("results/tbl_bias_treatment_", trt, "_", dt, ".rtf"))
-    ) }
+ggplot(
+  cov_plot_scen_prep, aes(x = magnitude_fct, y = prop, fill = status)
+) +
+  geom_col(width = 0.7, color = "white") +
+  geom_text(
+    aes(label = ifelse(prop == 0, "", label)),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    size = 2.8
+  ) +
+  scale_fill_manual(
+    values = setNames(
+      c("steelblue", "firebrick"),
+      levels(cov_plot_scen_prep$status)
+    )
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  facet_grid(nobs_fct ~ prop_extreme_fct) +
+  labs(
+    title = "Proportion of Scenarios Meeting Nominal 95% Coverage",
+    x = "Magnitude",
+    y = "Proportion of Scenarios",
+    fill = "Coverage Status"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 25, hjust = 1)
+  )
 
 ```
 
@@ -960,7 +944,8 @@ for (i in seq_along(gt_bias_by_treatment)) {
 ```{r plot_cov_heat}
 plot_cov_heat <- summ_gamma %>%
   dplyr::mutate(
-    treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate"),
+    treatment = forcats::fct_relevel(
+      treatment, "raw","topcode","mean_adj","median_adj","truncate"),
     cell = paste0("prop=", prop_extreme, ", mag=", magnitude_level, ", n=", n)
   ) %>%
   ggplot(aes(x = treatment, y = cell, fill = coverage)) +
@@ -1026,7 +1011,45 @@ sentences <- tab_consistency %>%
   dplyr::pull(txt)
 
 cat(paste0("- ", sentences, collapse = "\n"))
-```  
+```   
+
+## ATT descr  
+```{r att_descr}
+
+fn_att_descr <- function(data, dv, group_var = NULL) {
+
+  data |>
+    group_by(across(any_of(group_var))) |>
+    summarise(
+      scenarios   = dplyr::n(),
+      mean        = mean({{ dv }}, na.rm = TRUE),
+      sd          = sd({{ dv }}, na.rm = TRUE),
+      median      = median({{ dv }}, na.rm = TRUE),
+      mad         = mad({{ dv }}, na.rm = TRUE),
+      min         = min({{ dv }}, na.rm = TRUE),
+      q1          = quantile({{ dv }}, 0.25, na.rm = TRUE),
+      q3          = quantile({{ dv }}, 0.75, na.rm = TRUE),
+      iqr         = q3 - q1,
+      max         = max({{ dv }}, na.rm = TRUE),
+      mean_abs    = mean(abs({{ dv }}), na.rm = TRUE),
+      share_neg   = mean({{ dv }} < 0, na.rm = TRUE),
+      share_pos   = mean({{ dv }} > 0, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+att_est_descr <- fn_att_descr(all_df_att, dv=est)
+att_est_descr_treat <- fn_att_descr(
+  all_df_att, dv=est, group_var = "treatment_fct")
+att_est_desc_scenario <- fn_att_descr(
+  all_df_att, dv=est, group_var = c("treatment_fct","nobs_fct","prop_extreme_fct", "magnitude_fct")
+)
+
+fn_save_results(att_est_descr)
+fn_save_results(att_est_descr_treat)
+fn_save_results(att_est_desc_scenario)
+```
+
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
 
@@ -1043,14 +1066,6 @@ cat(paste0("- ", sentences, collapse = "\n"))
 pacman::p_load(car, effectsize, dplyr, tibble, knitr, kableExtra)
 
 # Ensure factors are properly set
-all_df_gamma <- all_df_gamma %>%
-  mutate(
-    treatment = factor(treatment),
-    nobs = factor(nobs),
-    prop_extreme = factor(prop_extreme),
-    magnitude_level = factor(magnitude_level)
-  )
-
 
 # Set contrasts for Type III SS (m!)
 options(contrasts = c("contr.sum", "contr.poly"))
@@ -1058,37 +1073,17 @@ options(contrasts = c("contr.sum", "contr.poly"))
 
 # 1: Fit the model
 
-model <- aov(bias ~ treatment * n * prop_extreme * magnitude_level, 
-             data = all_df_gamma)
-
-# model_lm<-lm(bias ~ treatment * n * prop_extreme * magnitude_level,
-#              data = all_df_gamma)
+model <- aov(
+  bias ~ treatment_fct * nobs_fct * prop_extreme_fct * magnitude_fct, 
+  data = all_df_gamma)
 
 
 # Step 2: Type III Sum of Squares ANOVA Table
 type3_anova <- car::Anova(model, type = "III")
 
-# 
-# Step 3: Effect Sizes (Both Eta² and Partial Eta²)
-# Trying multiple packages to see what we get
-# 
 
-# Get regular eta²
-eta2_regular <- effectsize::eta_squared(model, 
-                                        partial = FALSE,
-                                        ci = 0.95)
-# tried this with lm() model output above and it's the same. 
-print(eta2_regular)
-
-# Get partial eta²
-eta2_partial <- effectsize::eta_squared(model, 
-                                        partial = TRUE,
-                                        ci = 0.95)
-print(eta2_partial)
-
-# ============================================================
-# Step 4: Combined Table (Type III SS + Effect Sizes)
-# ============================================================
+# 3: Comb. table ===================================================
+# Type III SS + Effect Sizes
 
 # Extract Type III results
 type3_df <- type3_anova %>%
@@ -1105,6 +1100,10 @@ eta2_reg_df <- eta2_regular %>%
 eta2_part_df <- eta2_partial %>%
   as.data.frame() %>%
   select(Parameter, Eta2_partial)
+
+# Tried both of these below, came out the same.
+# eta2_lsr <- lsr::etaSquared(model, type=3)
+# eta2_descTools <- DescTools::EtaSq(model, type=3)
 
 # Combine everything - simplified version (point estimates only)
 combined_table <- type3_df %>%
@@ -1130,17 +1129,13 @@ combined_table <- type3_df %>%
 
 print(combined_table)
 
-# ============================================================
-# Step 5: Export to CSV
-# ============================================================
-
+# 4: Export ===================================================
 write.csv(combined_table, 
           here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
           row.names = FALSE)
 
-# ============================================================
-# Step 6: Publication-Ready Table (Simple version)
-# ============================================================
+# 6: Pub ready tbl ===========================================
+# (Simple version)
 
 combined_table %>%
   kable(
@@ -1154,9 +1149,8 @@ combined_table %>%
     full_width = FALSE
   )
 
-# ============================================================
-# Step 7: Identify Significant Effects and Large Effect Sizes
-# ============================================================
+# 7: id sig, large es =========================================
+# Identify Significant Effects and Large Effect Sizes
 
 significant_effects <- combined_table %>%
   filter(Term != "(Intercept)") %>%  # Exclude intercept
@@ -1174,9 +1168,7 @@ large_effects <- combined_table %>%
 cat("\n=== SMALL OR LARGER EFFECT SIZES (η²p ≥ .01) ===\n")
 print(large_effects)
 
-# ============================================================
-# Step 8: Summary Statistics
-# ============================================================
+# 8: Summary stats ===========================================
 
 # Exclude intercept for summary
 combined_no_int <- combined_table %>% filter(Term != "(Intercept)")
@@ -1203,9 +1195,8 @@ cat("sample size, proportion of extremes, and magnitude have minimal practical\n
 cat("impact on bias. The vast majority of variance in bias (>99%) is due to\n")
 cat("random sampling variability, not systematic differences between conditions.\n")
 
-# ============================================================
+# Opt: Post hocs ==============================================
 # OPTIONAL: Post-hoc tests for significant main effects
-# ============================================================
 
 library(emmeans)
 
@@ -1248,9 +1239,8 @@ if ("magnitude_level" %in% sig_main_effects$Term) {
             row.names = FALSE)
 }
 
-# ============================================================
+# Opt: Check assumptions =====================================
 # OPTIONAL: Check ANOVA assumptions
-# ============================================================
 
 cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
 
@@ -1282,16 +1272,10 @@ dev.off()
 
 cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
 
-# ============================================================
-# Step 9: Visualize Effect Sizes
-# ============================================================
-
-library(ggplot2)
 
 # Plot partial eta² for significant effects
-r# ============================================================
+# plot pes ===================================================
 # Step 9: Visualize Effect Sizes (CORRECTED)
-# ============================================================
 
 library(ggplot2)
 
@@ -1313,7 +1297,8 @@ plot_data <- type3_df %>%
 library(patchwork)  # For combining plots
 
 # Zoomed-in version (what you have now)
-p_zoomed <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+p_zoomed <- ggplot(
+  plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
   geom_col() +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
@@ -1330,14 +1315,21 @@ p_zoomed <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant
   theme(legend.position = "none")
 
 # Full scale version (shows context)
-p_full <- ggplot(plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+p_full <- ggplot(
+  plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
   geom_col() +
-  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.7) +
-  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
-  geom_vline(xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.7) +
-  annotate("text", x = 0.01, y = 6.5, label = "Small", size = 3, color = "red") +
-  annotate("text", x = 0.06, y = 6.5, label = "Med", size = 3, color = "orange") +
-  annotate("text", x = 0.14, y = 6.5, label = "Large", size = 3, color = "green") +
+  geom_vline(
+    xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.7) +
+  geom_vline(
+    xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
+  geom_vline(
+    xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.7) +
+  annotate(
+    "text", x = 0.01, y = 6.5, label = "Small", size = 3, color = "red") +
+  annotate(
+    "text", x = 0.06, y = 6.5, label = "Med", size = 3, color = "orange") +
+  annotate(
+    "text", x = 0.14, y = 6.5, label = "Large", size = 3, color = "green") +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
                "p < .01" = "cornflowerblue",
