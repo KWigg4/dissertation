@@ -66,7 +66,7 @@ all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>%
     prop_extreme_fct = factor(
       prop_extreme,
       levels = c("0.01","0.05","0.1"),
-      labels = c("1%", "5%", "10%")),
+      labels = c("0.01", "0.05", "0.1")),
     magnitude_fct = factor(
       magnitude_level,
       levels = c(1,2,3),
@@ -148,7 +148,7 @@ summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS")) |>
     prop_extreme_fct = factor(
       prop_extreme,
       levels = c("0.01","0.05","0.1"),
-      labels = c("1%", "5%", "10%")),
+      labels = c("0.01", "0.05", "0.1")),
     magnitude_fct = factor(
       magnitude_level,
       levels = c(1,2,3),
@@ -469,8 +469,7 @@ plots_bias
 
 ```{r plots_dir}
 
-#plot_bias_lollipop <- scenario_stats %>%
-prep_plot_bias_lollipop <- tbl_bias_summ %>%
+prep_plot_bias_lollipop2 <- summ_gamma %>%
   group_by(treatment_fct) %>%
   summarise(
     mean_of_means = mean(bias, na.rm = TRUE),
@@ -501,79 +500,51 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
        plot_bias_lollipop, width = 8, height = 5, dpi = 300)
 ```  
 
-### lollipop x2  
-```{r lolli_v2}
-# Reuse your scenario-level summary table for the Gamma interaction
-summ_gamma <- summ_gamma %>%
-  dplyr::mutate(
-  #   treatment = forcats::fct_relevel(
-  #     treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
-  #   ),
-    # scenario id string and absolute bias to plot
-    scen_id = paste0(
-      "prop=", prop_extreme_fct, " | mag=", magnitude_fct, " | n=", nobs_fct),
-    abs_bias = abs(bias)
-  )
-
-# Option 1: one lollipop per scenario: 
-
-make_lollipop <- function(df_one_scen) {
-  scen_lab <- df_one_scen$scen_id[1]
-  ggplot(df_one_scen, aes(x = abs_bias, y = treatment)) +
-    geom_segment(aes(x = 0, xend = abs_bias, y = treatment, yend = treatment),
-                 linewidth = 1.2, color = "grey55") +
-    geom_point(size = 3, color = "#2B6CB0") +
-    geom_text(aes(label = scales::number(abs_bias, accuracy = 0.0001)),
-              nudge_x = 0.002, size = 3.1, hjust = 0) +
-    labs(
-      title = "Absolute Bias by Treatment (Scenario Lollipop)",
-      subtitle = scen_lab,
-      x = "Absolute bias |bias| (scenario mean across reps)",
-      y = NULL
-    ) +
-    scale_x_continuous(expand = expansion(mult = c(0, .10))) +
-    theme_minimal() +
-    theme(panel.grid.major.y = element_blank())
-}
-
-# Split by scenario and save each plot
-by_scenario <- split(summ_gamma, summ_gamma$scen_id)
-
-for (nm in names(by_scenario)) {
-  p <- make_lollipop(by_scenario[[nm]])
-  out_path <- here::here(paste0("figures/lollipop_absbias_", gsub("[^A-Za-z0-9]+", "_", nm), "_", dt, ".png"))
-  ggsave(out_path, p, width = 7.5, height = 4.5, dpi = 300)
-}
-
-```  
 
 ### Trend lines for how bias change with mag of extremes, prop of extremes 
-```{r trend_lines}
+```{r bias_jitter}
 # --- Trend lines including n as a scenario condition ---
 # Treat magnitude level as numeric for trend fitting
-scenario_stats_num <- scenario_stats %>%
-  dplyr::mutate(
-    mag = as.numeric(as.character(magnitude_level)),
-    treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate"),
-    n = as.factor(n)  # factor for clean facet labels
-  )
 
 plot_trends <- ggplot(
-  scenario_stats_num,
-  aes(x = mag, y = bias, color = treatment, group = treatment)
+  summ_gamma,
+  aes(
+    x = magnitude_fct,
+    y = bias,
+    color = treatment_fct
+  )
 ) +
   geom_hline(yintercept = 0, linetype = "dashed") +
-  stat_summary(fun = mean, geom = "line", linewidth = 1.1) +
-  stat_summary(fun = mean, geom = "point", size = 2) +
-  facet_grid(n ~ prop_extreme, labeller = label_both) +
-  scale_x_continuous(breaks = c(1, 2, 3), labels = c("1", "2", "3")) +
+  geom_jitter(
+    width = 0.2,  
+    height = 0,
+    size = 3,
+    alpha = 0.7
+  ) +
+  facet_grid(nobs_fct ~ prop_extreme_fct, 
+             labeller = labeller(
+               nobs_fct = function(x) paste0("N=",x),
+               prop_extreme_fct = function(x) paste0(
+                 "Prop. Extreme=",x)
+               )
+             ) +
+  scale_color_manual( 
+    name = "Data Treatment", 
+    values = c(
+      "No treatment" = "#0072B2",
+      "Top-coding" = "#E69F00",
+      "Mean-preserved top-coding" = "#009E73",
+      "Median-preserved top-coding" = "#CC79A7",
+      "Truncation" = "#D55E00" ) ) +
   labs(
-    title = "Gamma Interaction: Trend in Mean Bias Across Magnitude of Extremes",
-    subtitle = "Rows = n; Cols = proportion extreme; lines show scenario-means averaged at each magnitude level",
-    x = "Magnitude level", y = "Scenario-mean bias"
+    title = "Gamma Interaction: Scenario-Level Bias Across Magnitude of Extremes",
+    subtitle = "Rows = N; Cols = proportion extreme; points show scenario-level bias",
+    x = "Magnitude level",
+    y = "Bias"
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom",
+        legend.title = element_text(face = "bold"))
 
 plot_trends
 ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
