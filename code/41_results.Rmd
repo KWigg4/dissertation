@@ -102,7 +102,7 @@ all_df_att <- readRDS(here::here("results/all_df_att_2026-02-09.RDS")) %>%
     prop_extreme_fct = factor(
       prop_extreme,
       levels = c("0.01","0.05","0.1"),
-      labels = c("1%", "5%", "10%")),
+      labels = c("0.01", "0.05", "0.10")),
     magnitude_fct = factor(
       magnitude_level,
       levels = c(1,2,3),
@@ -985,7 +985,7 @@ cat(paste0("- ", sentences, collapse = "\n"))
 ```   
 
 ## ATT descr  
-```{r att_descr}
+```{r fn_att_descr}
 
 fn_att_descr <- function(data, dv, group_var = NULL) {
 
@@ -1003,24 +1003,64 @@ fn_att_descr <- function(data, dv, group_var = NULL) {
       iqr         = q3 - q1,
       max         = max({{ dv }}, na.rm = TRUE),
       mean_abs    = mean(abs({{ dv }}), na.rm = TRUE),
+      n_neg       = sum({{ dv }}  < 0, na.rm=TRUE),
       share_neg   = mean({{ dv }} < 0, na.rm = TRUE),
+      n_pos       = sum({{ dv }}  > 0, na.rm=TRUE),
       share_pos   = mean({{ dv }} > 0, na.rm = TRUE),
+      n_neg_fmt   = paste0(scales::comma(n_neg, accuracy=1),
+                           " (",
+                           scales::percent(share_neg, accuracy=0.1),
+                           ")"),
+      n_pos_fmt   = paste0(scales::comma(n_pos, accuracy=1),
+                           " (",
+                           scales::percent(share_pos, accuracy=0.1),
+                           ")"),
       .groups = "drop"
     )
 }
 
+
+```  
+
+```{r att_est_descrs}
 att_est_descr <- fn_att_descr(all_df_att, dv=est)
+
 att_est_descr_treat <- fn_att_descr(
   all_df_att, dv=est, group_var = "treatment_fct")
+
+att_est_descr_cond <- fn_att_descr(
+  all_df_att, dv=est, group_var = c("nobs_fct","prop_extreme_fct", "magnitude_fct")
+)
+
 att_est_desc_scenario <- fn_att_descr(
   all_df_att, dv=est, group_var = c("treatment_fct","nobs_fct","prop_extreme_fct", "magnitude_fct")
 )
 
 fn_save_results(att_est_descr)
 fn_save_results(att_est_descr_treat)
+fn_save_results(att_est_descr_cond)
 fn_save_results(att_est_desc_scenario)
 ```
 
+```{r att_bias_descrs}
+att_bias_descr <- fn_att_descr(all_df_att, dv=bias)
+
+att_bias_descr_treat <- fn_att_descr(
+  all_df_att, dv=bias, group_var = "treatment_fct")
+
+att_bias_descr_cond <- fn_att_descr(
+  all_df_att, dv=bias, group_var = c("nobs_fct","prop_extreme_fct", "magnitude_fct")
+)
+
+att_bias_desc_scenario <- fn_att_descr(
+  all_df_att, dv=bias, group_var = c("treatment_fct","nobs_fct","prop_extreme_fct", "magnitude_fct")
+)
+
+fn_save_results(att_bias_descr)
+fn_save_results(att_bias_descr_treat)
+fn_save_results(att_bias_descr_cond)
+fn_save_results(att_bias_desc_scenario)
+```
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
 
