@@ -1,0 +1,714 @@
+---
+title: "DGP"
+author: "Felix/KTW"
+date: "02/21/2026"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r pkgs}
+pacman::p_load(
+  broom,
+  dplyr,
+  effectsize,
+  forcats,
+  furrr,
+  ggforce,
+  ggplot2,
+  ggrepel,
+  glue,
+  gt,
+  gtsummary,
+  here,
+  lubridate,
+  MASS,
+  purrr,
+  readr,
+  scales,
+  tibble,
+  tidyr)
+
+dt <- lubridate::today()
+dir.create("results", showWarnings = FALSE)
+dir.create("figures", showWarnings = FALSE)
+
+conflicted::conflicts_prefer(
+  dplyr::select(),
+  dplyr::filter()
+)
+
+# Save csv and RDS to results directory
+fn_save_results <- function(df) {
+  name <- deparse(substitute(df))
+  saveRDS(df, here::here(paste0("results/",name,"_",dt, ".RDS")))
+  write.csv(df,here::here(paste0("results/",name,"_",dt, ".csv")))
+}
+
+```
+
+
+#0) ONE SOURCE OF TRUTH: DGP COEFFICIENTS
+
+```{r helpers}
+COEF <- list(
+  p1 = list(b0 = 0.0, post = 0.2, tx = -0.2, int = 0.0,
+            female = 1.2, hisp = -0.8, zpcs = -0.2),
+  p2 = list(b0 = 7.0, post = 0.2, tx =  0.2, int = 0.0,
+            female = 0.4, hisp = -0.2, zpcs = -0.4)
+)
+
+# --- helper: log-uniform draw for extremes ---
+rlogunif <- function(n, min_val, max_val) {
+  if (n <= 0) return(numeric(0))
+  exp(runif(n, log(min_val), log(max_val)))
+}
+
+# --- helper: extreme value ranges ---
+extreme_range <- function(mag_level) {
+  switch(as.character(mag_level),
+         "1" = c(5e4, 1e6),
+         "2" = c(5e4, 2e6),
+         "3" = c(5e4, 3e6),
+         stop("Invalid magnitude_level"))
+}
+
+```
+
+#1) DGP: two-part Gamma with extremes
+
+```{r sim}
+simulate_panel_data <- function(
+  n, magnitude_level, prop_extreme = 0.01,
+  p_treated = 0.5, sigma_u = 0.5, rho = 0.5,
+  gamma_shape = 3,
+  COEF
+) {
+  T <- 2; N <- n * T
+  ids <- rep(1:n, each = T)
+  ind_post <- rep(0:1, times = n)
+
+  # covariates
+  ind_tx_i     <- rbinom(n, 1, p_treated)
+  ind_female_i <- rbinom(n, 1, 0.5)
+  HISPANX_i    <- rbinom(n, 1, 0.2)
+  #INSCOV_i     <- sample(1:3, n, replace = TRUE)
+
+  ind_tx     <- rep(ind_tx_i, each = T)
+  ind_female <- rep(ind_female_i, each = T)
+  HISPANX    <- rep(HISPANX_i, each = T)
+  #INSCOV     <- factor(rep(INSCOV_i, each = T))
+
+  # PCS42 with correlation (keep your approach)
+  Sigma <- matrix(c(1, rho, rho, 1), 2, 2)
+  pcs   <- MASS::mvrnorm(n, mu = c(50, 50), Sigma = Sigma)
+  PCS42 <- as.vector(t(pcs))
+  zPCS  <- (PCS42 - 50) / 10  # standardized PCS42
+
+  # random intercept (kept for fidelity; not used in lp by design)
+  u_i <- rnorm(n, 0, sigma_u)
+  u   <- u_i[ids]
+
+  # Part 1: logistic >0 (use COEF)
+  lp_cov <- COEF$p1$b0 +
+    COEF$p1$post   * ind_post +
+    COEF$p1$tx     * ind_tx +
+    COEF$p1$int    * (ind_post * ind_tx) +
+    COEF$p1$female * ind_female +
+    COEF$p1$hisp   * HISPANX +
+    COEF$p1$zpcs   * zPCS
+
+  pr_pos  <- plogis(lp_cov)
+  ind_gt0 <- rbinom(N, 1, pr_pos)
+
+  # Part 2: Gamma for positives (use COEF)
+  lp_cont <- COEF$p2$b0 +
+    COEF$p2$post   * ind_post +
+    COEF$p2$tx     * ind_tx +
+    COEF$p2$int    * (ind_post * ind_tx) +
+    COEF$p2$female * ind_female +
+    COEF$p2$hisp   * HISPANX +
+    COEF$p2$zpcs   * zPCS
+
+  mu <- exp(lp_cont)
+  shape <- gamma_shape
+  scale <- mu / shape
+
+  TOTEXPYY <- rep(0, N)
+  TOTEXPYY[ind_gt0 == 1] <- rgamma(sum(ind_gt0),
+                                   shape = shape,
+                                   scale = scale[ind_gt0 == 1])
+
+  # inject extremes
+  K_ext <- rbinom(1, N, prop_extreme)
+  if (K_ext > 0) {
+    rng <- extreme_range(magnitude_level)
+    idx_ext <- sample.int(N, size = K_ext, replace = FALSE)
+    TOTEXPYY[idx_ext] <- rlogunif(K_ext, rng[1], rng[2])
+  } else idx_ext <- integer(0)
+
+  tibble(
+    DUPERSID = factor(ids),
+    ind_post, ind_tx, ind_female, HISPANX, PCS42, zPCS, #INSCOV,
+    ind_gt0 = ind_gt0,
+    TOTEXPYY = TOTEXPYY,
+    extreme_flag = as.integer(seq_len(N) %in% idx_ext),
+    magnitude_level, prop_extreme
+  )
+}
+
+```
+
+
+#2) Treatments for extreme values (UPDATED)
+# - mean/median preserved uses values > q95 only
+# - truncation removes rows (not NA)
+
+```{r treatments}
+treat_extremes_df <- function(dat, method = "raw") {
+  if (method == "raw") return(dat)
+
+  q95 <- quantile(dat$TOTEXPYY, 0.95, na.rm = TRUE)
+
+  if (method == "topcode") {
+    dat$TOTEXPYY <- pmin(dat$TOTEXPYY, q95)
+    return(dat)
+  }
+
+  if (method == "mean_adj") {
+    m <- mean(dat$TOTEXPYY[dat$TOTEXPYY > q95], na.rm = TRUE)
+    dat$TOTEXPYY[dat$TOTEXPYY > q95] <- m
+    return(dat)
+  }
+
+  if (method == "median_adj") {
+    m <- median(dat$TOTEXPYY[dat$TOTEXPYY > q95], na.rm = TRUE)
+    dat$TOTEXPYY[dat$TOTEXPYY > q95] <- m
+    return(dat)
+  }
+
+  if (method == "truncate") {
+    dat <- dat %>% filter(TOTEXPYY <= q95)
+    return(dat)
+  }
+
+  stop("Unknown treatment method")
+}
+
+```
+
+#3) Safe Gamma fit wrapper
+# Returns list(fit, error): captures warning AND error messages for failure logging
+
+```{r safe_gamma}
+safe_gamma_fit <- function(dat) {
+  dat2 <- dat %>% filter(ind_gt0 == 1, is.finite(TOTEXPYY), TOTEXPYY > 0)
+  if (nrow(dat2) < 10) return(list(fit = NULL, error = "too few rows"))
+
+  tryCatch({
+    fit <- glm(
+      TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+      data    = dat2,
+      family  = Gamma(link = "log"),
+      control = glm.control(maxit = 100, epsilon = 1e-8)
+    )
+    list(fit = fit, error = NA_character_)
+  }, warning = function(w) {
+    list(fit = NULL, error = paste("WARNING:", conditionMessage(w)))
+  }, error = function(e) {
+    list(fit = NULL, error = paste("ERROR:", conditionMessage(e)))
+  })
+}
+
+```
+
+#4) ATT computation (RQ4): Estimated + TRUE using same COEF
+```{r att}
+compute_ATT_hat <- function(dat, fit_logit, fit_gamma) {
+
+  treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
+  if (nrow(treated_post) == 0) return(NA_real_)
+
+  treated_cf <- treated_post %>% mutate(ind_tx = 0)
+
+  # Part 1: Pr(Y>0)
+  p_obs <- predict(fit_logit, newdata = treated_post, type = "response")
+  p_cf  <- predict(fit_logit, newdata = treated_cf,   type = "response")
+
+  # Part 2: E[Y|Y>0] (Gamma log link; response is on original scale)
+  mu_obs <- predict(fit_gamma, newdata = treated_post, type = "response")
+  mu_cf  <- predict(fit_gamma, newdata = treated_cf,   type = "response")
+
+  mean(p_obs * mu_obs - p_cf * mu_cf)
+}
+
+compute_true_ATT <- function(dat, COEF) {
+
+  treated_post <- dat %>% filter(ind_tx == 1, ind_post == 1)
+  if (nrow(treated_post) == 0) return(NA_real_)
+
+  treated_cf <- treated_post %>% mutate(ind_tx = 0)
+
+  # TRUE Part 1
+  lp1_obs <- COEF$p1$b0 +
+    COEF$p1$post   * treated_post$ind_post +
+    COEF$p1$tx     * treated_post$ind_tx +
+    COEF$p1$int    * (treated_post$ind_post * treated_post$ind_tx) +
+    COEF$p1$female * treated_post$ind_female +
+    COEF$p1$hisp   * treated_post$HISPANX +
+    COEF$p1$zpcs   * treated_post$zPCS
+  p_obs <- plogis(lp1_obs)
+
+  lp1_cf <- COEF$p1$b0 +
+    COEF$p1$post   * treated_cf$ind_post +
+    COEF$p1$tx     * treated_cf$ind_tx +
+    COEF$p1$int    * (treated_cf$ind_post * treated_cf$ind_tx) +
+    COEF$p1$female * treated_cf$ind_female +
+    COEF$p1$hisp   * treated_cf$HISPANX +
+    COEF$p1$zpcs   * treated_cf$zPCS
+  p_cf <- plogis(lp1_cf)
+
+  # TRUE Part 2
+  lp2_obs <- COEF$p2$b0 +
+    COEF$p2$post   * treated_post$ind_post +
+    COEF$p2$tx     * treated_post$ind_tx +
+    COEF$p2$int    * (treated_post$ind_post * treated_post$ind_tx) +
+    COEF$p2$female * treated_post$ind_female +
+    COEF$p2$hisp   * treated_post$HISPANX +
+    COEF$p2$zpcs   * treated_post$zPCS
+  mu_obs <- exp(lp2_obs)
+
+  lp2_cf <- COEF$p2$b0 +
+    COEF$p2$post   * treated_cf$ind_post +
+    COEF$p2$tx     * treated_cf$ind_tx +
+    COEF$p2$int    * (treated_cf$ind_post * treated_cf$ind_tx) +
+    COEF$p2$female * treated_cf$ind_female +
+    COEF$p2$hisp   * treated_cf$HISPANX +
+    COEF$p2$zpcs   * treated_cf$zPCS
+  mu_cf <- exp(lp2_cf)
+
+  mean(p_obs * mu_obs - p_cf * mu_cf)
+}
+
+```
+
+
+#5) One replication under one scenario
+# - uses zPCS in models
+# - returns interaction estimates + ATT outputs
+# - failure logging for both logistic and gamma models
+
+```{r run_one}
+run_one <- function(
+    n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+
+  dat <- simulate_panel_data(
+    n = n,
+    magnitude_level = magnitude_level,
+    prop_extreme = prop_extreme,
+    gamma_shape = gamma_shape,
+    COEF = COEF
+  )
+
+  # Apply treatment at the DATAFRAME level
+  dat <- treat_extremes_df(dat, treatment)
+
+  # --- Logistic (wrapped for failure logging) ---
+  logit_result <- tryCatch({
+    fit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+               data = dat, family = binomial)
+    list(fit = fit, error = NA_character_)
+  }, warning = function(w) {
+    list(fit = NULL, error = paste("WARNING:", conditionMessage(w)))
+  }, error = function(e) {
+    list(fit = NULL, error = paste("ERROR:", conditionMessage(e)))
+  })
+
+  fit1        <- logit_result$fit
+  logit_error <- logit_result$error
+
+  c1 <- if (!is.null(fit1)) {
+    coef(summary(fit1))["ind_post:ind_tx", c("Estimate", "Std. Error")]
+  } else {
+    c(NA_real_, NA_real_)
+  }
+
+  # --- Gamma fit object (safe, with failure logging) ---
+  gamma_result <- safe_gamma_fit(dat)
+  fit2         <- gamma_result$fit
+  gamma_error  <- gamma_result$error
+
+  c2 <- if (!is.null(fit2)) {
+    coef(summary(fit2))["ind_post:ind_tx", c("Estimate", "Std. Error")]
+  } else {
+    c(NA_real_, NA_real_)
+  }
+
+  # --- ATT requires both model objects ---
+  ATT_hat  <- if (!is.null(fit1) && !is.null(fit2)) compute_ATT_hat(dat, fit1, fit2) else NA_real_
+  ATT_true <- compute_true_ATT(dat, COEF)
+  ATT_bias <- ATT_hat - ATT_true
+
+  # --- failed flag: TRUE if either model failed ---
+  failed <- is.null(fit1) || is.null(fit2)
+
+  tibble(
+    model = c("logit", "gamma", "ATT"),
+    est   = c(unname(c1[1]), unname(c2[1]), ATT_hat),
+    se    = c(unname(c1[2]), unname(c2[2]), NA_real_),
+    true  = c(COEF$p1$int, COEF$p2$int, ATT_true),
+    bias  = c(unname(c1[1]) - COEF$p1$int,
+              unname(c2[1]) - COEF$p2$int,
+              ATT_bias),
+    n = n, prop_extreme, magnitude_level, gamma_shape, treatment,
+
+    # failure logging columns
+    failed      = failed,
+    logit_error = c(logit_error, NA_character_, NA_character_),
+    gamma_error = c(NA_character_, gamma_error, NA_character_)
+  )
+}
+
+# run_mc uses a for loop instead of replicate() so that per-replication
+# crashes are caught and logged rather than lost.
+# A failure summary is printed to the console after every run.
+run_mc <- function(
+    B, n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF) {
+
+  results <- vector("list", B)
+
+  for (i in seq_len(B)) {
+    results[[i]] <- tryCatch({
+      run_one(n, magnitude_level, prop_extreme, gamma_shape, treatment, COEF)
+    }, error = function(e) {
+      # Complete run_one() crash — return a minimal failure record for all 3 model rows
+      tibble(
+        model           = c("logit", "gamma", "ATT"),
+        est             = NA_real_,
+        se              = NA_real_,
+        true            = NA_real_,
+        bias            = NA_real_,
+        n               = n,
+        prop_extreme    = prop_extreme,
+        magnitude_level = magnitude_level,
+        gamma_shape     = gamma_shape,
+        treatment       = treatment,
+        failed          = TRUE,
+        logit_error     = paste("CRASH:", conditionMessage(e)),
+        gamma_error     = paste("CRASH:", conditionMessage(e))
+      )
+    })
+  }
+
+  out <- bind_rows(results)
+
+  # --- Print failure summary to console after each run_mc call ---
+  n_failed <- out %>%
+    filter(model == "gamma", failed == TRUE) %>%
+    nrow()
+
+  failure_reasons <- out %>%
+    filter(model == "gamma", failed == TRUE) %>%
+    count(gamma_error, sort = TRUE)
+
+  message(sprintf(
+    "\n--- run_mc failure summary [n=%s, mag=%s, prop=%s, trt=%s]: %d / %d replications failed ---",
+    n, magnitude_level, prop_extreme, treatment, n_failed, B
+  ))
+  if (nrow(failure_reasons) > 0) {
+    message("Failure reasons (gamma model):")
+    print(failure_reasons)
+  }
+
+  out
+}
+
+```
+
+#Step 1: Representative dataset (histograms + model fits)
+```{r dat_example}
+set.seed(123)
+dat_example <- simulate_panel_data(
+  n = 2500, # actually 5k
+  magnitude_level = 1,
+  prop_extreme = 0.01,
+  gamma_shape = 3,
+  COEF = COEF
+)
+
+# Descriptives, Table One 
+# Helper for quantiles
+q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
+
+tab_y_example <- dat_example %>%
+  # dplyr::group_by(treatment) %>%
+  dplyr::summarise(
+    nobs        = dplyr::n(),
+    mean        = mean(TOTEXPYY, na.rm = TRUE),
+    sd          = sd(TOTEXPYY, na.rm = TRUE),
+    median      = median(TOTEXPYY, na.rm = TRUE),
+    mad         = mad(TOTEXPYY, na.rm = TRUE),
+    min         = min(TOTEXPYY, na.rm = TRUE),
+    q1          = q_fun(TOTEXPYY, 0.25),
+    q3          = q_fun(TOTEXPYY, 0.75),
+    iqr         = q3 - q1,
+    max         = max(TOTEXPYY, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+dat_example |> 
+	select(
+		TOTEXPYY,
+		ind_post,
+		ind_tx,
+		ind_gt0,
+		zPCS,
+		HISPANX,
+		ind_female
+		) |> 
+	gtsummary::tbl_summary(
+		by=ind_tx,
+		type = list(
+			#AGELAST ~ "continuous",
+			ind_female ~ "categorical",
+			ind_gt0 ~ "categorical",
+			ind_post ~ "categorical"),
+		statistic = list(all_continuous() ~ "{mean} ({sd})")
+		) |> 
+	# add_p() |> 
+	gtsummary::add_overall()
+
+p1 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "skyblue", color = "black") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY", x = "Spending", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+  geom_histogram(bins = 100, fill = "seagreen", color = "black") +
+  scale_x_log10(labels = scales::comma) +
+  labs(title = "Histogram of TOTEXPYY (log scale)", x = "Spending (log)", y = "Count") +
+  theme_minimal()
+
+print(p1); print(p2)
+
+fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+                 data = dat_example, family = binomial)
+
+fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
+                 data = dat_example %>% filter(ind_gt0 == 1),
+                 family = Gamma(link = "log"))
+
+summary(fit_logit)
+summary(fit_gamma)
+
+```
+
+#Step 2: Full Monte Carlo across scenarios
+```{r full_mc}
+
+# Don't forget n_vals are double - so putting in 2500 will give 5000 obs
+# 2500 = 5000 obs, 5000 obs=10000, 10000=20000
+n_vals <- c(2500, 5000, 10000) 
+prop_extreme_vals <- c(0.01, 0.05, 0.10)
+magnitude_vals <- c(1, 2, 3)
+treatment_methods <- c("raw", "topcode", "mean_adj", "median_adj", "truncate")
+
+grid <- expand.grid(
+  n = n_vals,
+  prop_extreme = prop_extreme_vals,
+  magnitude_level = magnitude_vals,
+  treatment = treatment_methods,
+  stringsAsFactors = FALSE
+)
+
+set.seed(2025)
+B <- 500
+
+all_df <- furrr::future_pmap_dfr(
+  grid,
+  ~ run_mc(B, ..1, ..3, ..2, gamma_shape = 3, ..4, COEF = COEF),
+  .options = furrr::furrr_options(seed = TRUE)
+)
+
+# Save raw simulation output
+fn_save_results(all_df)
+
+# --- Save failure log CSV (one row per distinct failure, with error messages) ---
+failure_log <- all_df %>%
+  filter(failed == TRUE) %>%
+  select(model, n, prop_extreme, magnitude_level, treatment,
+         gamma_shape, logit_error, gamma_error) %>%
+  distinct()
+
+write.csv(failure_log,
+          file = here::here(paste0("results/failure_log_", dt, ".csv")),
+          row.names = FALSE)
+
+# --- Save human-readable failure summary txt (for dissertation reference) ---
+log_path <- here::here(paste0("results/failure_summary_log_", dt, ".txt"))
+
+sink(log_path)
+cat(sprintf("Failure summary — run date: %s\n", dt))
+cat(sprintf("Total failed replications (gamma model): %d / %d\n\n",
+            sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
+            sum(all_df$model == "gamma")))
+
+all_df %>%
+  filter(model == "gamma", failed == TRUE) %>%
+  count(n, prop_extreme, magnitude_level, treatment, gamma_error, sort = TRUE) %>%
+  print(n = Inf)
+sink()
+
+message(sprintf("\nTotal failed replications (gamma model): %d / %d",
+                sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
+                sum(all_df$model == "gamma")))
+message("Failure summary written to: ", log_path)
+
+```  
+
+## IF RESTARTING, start here ================================
+
+```{r}
+# If needed, can re-enter all_df
+# all_df <- readRDS(here::here("results/all_df_2026-02-06.RDS"))
+```  
+
+
+### Summarise results
+
+# SE comparison:
+#   emp_se        = Monte Carlo SD of estimates across reps (true sampling variability)
+#   mean_model_se = average of the per-rep model-reported SEs
+#   se_ratio      = mean_model_se / emp_se; near 1 = well-calibrated,
+#                   <1 = model underestimates SE (anti-conservative), >1 = overestimates (conservative)
+#   se_bias       = mean_model_se - emp_se; absolute difference for scale context
+
+```{r summ_tbls}
+summ_grid <- all_df %>%
+  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+  summarise(
+    mean_est      = round(mean(est, na.rm = TRUE), 6),
+    mean_true     = round(mean(true, na.rm = TRUE), 6),
+    bias          = round(mean(bias, na.rm = TRUE), 6),
+    emp_se        = round(sd(est, na.rm = TRUE), 6),
+    mean_model_se = round(mean(se, na.rm = TRUE), 6),
+    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage      = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
+      6
+    ),
+    n_fail    = sum(is.na(est)),
+    n_pass    = 500 - n_fail,
+    prop_fail = n_fail/500,
+    prop_pass = n_pass/500,
+    .groups = "drop"
+  )
+
+summ_gamma <- summ_grid %>%
+  dplyr::filter(model == "gamma") %>%
+  dplyr::mutate(
+    treatment = forcats::fct_relevel(
+      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate"
+    ),
+    # so I don't forget the actual obs was n*2: 
+    nobs = n*2
+  )  %>%
+  relocate(nobs, .after=n) %>%
+  # create a group index
+  arrange(nobs, prop_extreme, magnitude_level, treatment) %>%
+  group_by(nobs, prop_extreme, magnitude_level) %>%
+  mutate(
+    design_id = cur_group_id(),
+    # none were exactly 0 
+    ind_bias_pos = ifelse(bias > 0 , 1, 0),
+    ind_bias_neg = ifelse(bias < 0, 1, 0),
+    n_bias_pos = sum(ind_bias_pos),
+    prop_bias_pos = n_bias_pos/5,
+    n_bias_neg = sum(ind_bias_neg),
+    prop_bias_neg = n_bias_neg/5) |> 
+  ungroup() |> 
+  relocate(design_id, .before=everything())
+
+fn_save_results(summ_gamma)
+fn_save_results(summ_grid)
+
+```  
+
+
+```{r gamma_sim_summ}
+# ---- Gamma (Part 2 interaction): bias, SE, coverage ----
+# all_df_gamma <- all_df %>%
+#   dplyr::filter(model == "gamma") %>%
+#   dplyr::mutate(
+#     n = factor(n),
+#     prop_extreme = factor(prop_extreme),
+#     magnitude_level = factor(magnitude_level),
+#     treatment = factor(treatment),
+#     cover_ind = ifelse(is.na(est) | is.na(se), NA_real_,
+#                        as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se)))
+#   )
+
+# --- Build replicate-level coverage indicator for the Gamma model ---
+all_df_gamma_w_fails <- all_df %>%
+  dplyr::filter(model == "gamma") %>%
+  # I keep forgetting it's *2 for total observations, make this to remember
+  mutate(nobs = n*2)  %>%
+  relocate(nobs, .after=n) |> 
+  dplyr::mutate(
+    cover_ind = dplyr::if_else(
+      is.na(est) | is.na(se),
+      NA_real_,
+      as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se))
+      ),
+    # ensure factors for ANOVA
+    n = as.factor(n),
+    prop_extreme = as.factor(prop_extreme),
+    magnitude_level = as.factor(magnitude_level),
+    treatment = forcats::fct_relevel(
+      treatment, "raw","topcode","mean_adj","median_adj","truncate") 
+  )
+
+# Used for modeling: 
+all_df_gamma <- all_df_gamma_w_fails |> 
+  dplyr::filter(!is.na(cover_ind))
+
+fn_save_results(all_df_gamma)
+
+# Inspect where cover_ind failed:
+all_df_gamma_fails <- all_df_gamma_w_fails |> 
+  filter(is.na(cover_ind)) 
+
+all_df_gamma_fails_tbl <- all_df_gamma_fails |> 
+  group_by(treatment, nobs, prop_extreme, magnitude_level) |> 
+  summarise(n = n()) |> 
+  ungroup() |> 
+  mutate(prop_of_500 = n/500)
+
+fn_save_results(all_df_gamma_fails)
+fn_save_results(all_df_gamma_fails_tbl)
+
+```  
+
+```{r all_df_att}
+# ---- ATT (RQ4): ATT_hat, ATT_bias, and effect size across treatments ----
+all_df_att <- all_df %>%
+  dplyr::filter(model == "ATT") %>%
+  dplyr::mutate(
+    n = factor(n),
+    prop_extreme = factor(prop_extreme),
+    magnitude_level = factor(magnitude_level),
+    treatment = factor(treatment)
+  )
+fn_save_results(all_df_att)
+```
+
+
+
+
+
