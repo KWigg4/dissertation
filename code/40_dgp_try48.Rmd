@@ -538,11 +538,13 @@ all_df <- furrr::future_pmap_dfr(
 fn_save_results(all_df)
 
 # --- Save failure log CSV (one row per distinct failure, with error messages) ---
+
 failure_log <- all_df %>%
   filter(failed == TRUE) %>%
   select(model, n, prop_extreme, magnitude_level, treatment,
          gamma_shape, logit_error, gamma_error) %>%
-  distinct()
+  distinct() |> 
+	filter(model != "ATT")
 
 write.csv(failure_log,
           file = here::here(paste0("results/failure_log_", dt, ".csv")),
@@ -557,11 +559,22 @@ cat(sprintf("Total failed replications (gamma model): %d / %d\n\n",
             sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
             sum(all_df$model == "gamma")))
 
-all_df %>%
-  filter(model == "gamma", failed == TRUE) %>%
-  count(n, prop_extreme, magnitude_level, treatment, gamma_error, sort = TRUE) %>%
-  print(n = Inf)
+# Set options to prevent truncation
+old_opts <- options(
+  width        = 200,
+  pillar.width = 200
+)
+local({
+  withr::local_options(pillar.max_char = -1)   # -1 = no truncation
+  all_df %>%
+    filter(model == "gamma", failed == TRUE) %>%
+    count(n, prop_extreme, magnitude_level, treatment, gamma_error, sort = TRUE) %>%
+    print(n = Inf, width = Inf)
+})
+options(old_opts)
+
 sink()
+
 
 message(sprintf("\nTotal failed replications (gamma model): %d / %d",
                 sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
@@ -584,7 +597,8 @@ message("Failure summary written to: ", log_path)
 #   emp_se        = Monte Carlo SD of estimates across reps (true sampling variability)
 #   mean_model_se = average of the per-rep model-reported SEs
 #   se_ratio      = mean_model_se / emp_se; near 1 = well-calibrated,
-#                   <1 = model underestimates SE (anti-conservative), >1 = overestimates (conservative)
+#                   <1 = model underestimates SE (anti-conservative), >1 = overestimates 
+# (conservative)
 #   se_bias       = mean_model_se - emp_se; absolute difference for scale context
 
 ```{r summ_tbls}
