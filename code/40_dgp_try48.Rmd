@@ -537,49 +537,20 @@ all_df <- furrr::future_pmap_dfr(
 # Save raw simulation output
 fn_save_results(all_df)
 
-# --- Save failure log CSV (one row per distinct failure, with error messages) ---
+# Error log. 
+# all errors were on gamma model, so only including gamma model here. If ever there are errors on the logit model, can do this again but subset to model=="logit" and using logit_error.
 
 failure_log <- all_df %>%
-  filter(failed == TRUE) %>%
-  select(model, n, prop_extreme, magnitude_level, treatment,
-         gamma_shape, logit_error, gamma_error) %>%
-  distinct() |> 
-	filter(model != "ATT")
+  filter(failed == TRUE, model == "gamma") %>%
+  select(n, prop_extreme, magnitude_level, treatment,
+         gamma_shape, gamma_error) %>%
+  count(n, prop_extreme, magnitude_level, treatment,
+        gamma_shape, gamma_error,
+        name = "n_failures", sort = TRUE)
 
 write.csv(failure_log,
           file = here::here(paste0("results/failure_log_", dt, ".csv")),
           row.names = FALSE)
-
-# --- Save human-readable failure summary txt (for dissertation reference) ---
-log_path <- here::here(paste0("results/failure_summary_log_", dt, ".txt"))
-
-sink(log_path)
-cat(sprintf("Failure summary — run date: %s\n", dt))
-cat(sprintf("Total failed replications (gamma model): %d / %d\n\n",
-            sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
-            sum(all_df$model == "gamma")))
-
-# Set options to prevent truncation
-old_opts <- options(
-  width        = 200,
-  pillar.width = 200
-)
-local({
-  withr::local_options(pillar.max_char = -1)   # -1 = no truncation
-  all_df %>%
-    filter(model == "gamma", failed == TRUE) %>%
-    count(n, prop_extreme, magnitude_level, treatment, gamma_error, sort = TRUE) %>%
-    print(n = Inf, width = Inf)
-})
-options(old_opts)
-
-sink()
-
-
-message(sprintf("\nTotal failed replications (gamma model): %d / %d",
-                sum(all_df$model == "gamma" & all_df$failed == TRUE, na.rm = TRUE),
-                sum(all_df$model == "gamma")))
-message("Failure summary written to: ", log_path)
 
 ```  
 
@@ -601,7 +572,141 @@ message("Failure summary written to: ", log_path)
 # (conservative)
 #   se_bias       = mean_model_se - emp_se; absolute difference for scale context
 
-```{r summ_tbls}
+```{r fn_factors}
+# ---- Helper: shared factor mutations ----
+add_factors <- function(df) {
+  df %>%
+    mutate(
+      nobs_fct = factor(
+        nobs,
+        levels = c(5000, 10000, 20000),
+        labels = c("5,000", "10,000", "20,000")),
+      prop_extreme_fct = factor(
+        prop_extreme,
+        levels = c(0.01, 0.05, 0.1),
+        labels = c("0.01", "0.05", "0.10")),
+      magnitude_fct = factor(
+        magnitude_level,
+        levels = c(1, 2, 3),
+        labels = c(1, 2, 3)),
+      treatment_fct = factor(
+        treatment,
+        levels = c("raw", "topcode", "mean_adj", "median_adj", "truncate"),
+        labels = c("No treatment", "Top-coding", "Mean-preserved top-coding",
+                   "Median-preserved top-coding", "Truncation"))
+    )
+}
+```  
+
+```{r all_df_gamma}
+# ---- all_df_gamma (replicate-level, with coverage indicator) ----
+all_df_gamma_w_fails <- all_df %>%
+  filter(model == "gamma") %>%
+  mutate(
+    nobs      = n * 2,
+    cover_ind = if_else(
+      is.na(est) | is.na(se), NA_real_,
+      as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se))),
+    n               = as.factor(n),
+    prop_extreme    = as.factor(prop_extreme),
+    magnitude_level = as.factor(magnitude_level),
+    treatment       = forcats::fct_relevel(
+      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate")
+  ) %>%
+  relocate(nobs, .after = n) %>%
+  add_factors()
+
+all_df_gamma <- all_df_gamma_w_fails %>% filter(!is.na(cover_ind))
+
+all_df_gamma_fails     <- all_df_gamma_w_fails %>% filter(is.na(cover_ind))
+all_df_gamma_fails_tbl <- all_df_gamma_fails %>%
+  group_by(treatment, nobs, prop_extreme, magnitude_level) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(prop_of_500 = n / 500)
+
+fn_save_results(all_df_gamma)
+fn_save_results(all_df_gamma_fails)
+fn_save_results(all_df_gamma_fails_tbl)
+```  
+
+```{r all_df_att}
+# ---- all_df_att ----
+all_df_att <- all_df %>%
+  filter(model == "ATT", !is.na(est)) %>%
+  mutate(
+    nobs      = as.numeric(as.character(n)) * 2,
+    abs_bias  = abs(bias),
+    n         = as.factor(n),
+    prop_extreme    = as.factor(prop_extreme),
+    magnitude_level = as.factor(magnitude_level),
+    treatment       = as.factor(treatment)
+  ) %>%
+  add_factors() %>%
+  select(model, est, true, bias, abs_bias,
+         nobs, nobs_fct, prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct, treatment, treatment_fct,
+         everything())
+
+fn_save_results(all_df_att)
+```
+
+
+
+```{r summ_grid_summ_gamma}
+# ---- summ_grid + summ_gamma ----
+summ_grid <- all_df %>%
+  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+  summarise(
+    mean_est      = round(mean(est, na.rm = TRUE), 6),
+    mean_true     = round(mean(true, na.rm = TRUE), 6),
+    bias          = round(mean(bias, na.rm = TRUE), 6),
+    emp_se        = round(sd(est, na.rm = TRUE), 6),
+    mean_model_se = round(mean(se, na.rm = TRUE), 6),
+    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage      = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE), 6),
+    n_fail    = sum(is.na(est)),
+    n_pass    = 500 - n_fail,
+    prop_fail = n_fail / 500,
+    prop_pass = n_pass / 500,
+    .groups = "drop"
+  ) %>%
+  mutate(nobs = n * 2, abs_bias = abs(bias)) %>%
+  add_factors()
+
+summ_gamma <- summ_grid %>%
+  filter(model == "gamma") %>%
+  mutate(
+    treatment_fct = forcats::fct_relevel(
+      treatment_fct, "No treatment", "Top-coding", "Mean-preserved top-coding",
+      "Median-preserved top-coding", "Truncation")
+  ) %>%
+  arrange(nobs, prop_extreme, magnitude_level, treatment) %>%
+  group_by(nobs, prop_extreme, magnitude_level) %>%
+  mutate(
+    design_id     = cur_group_id(),
+    ind_bias_pos  = ifelse(bias > 0, 1, 0),
+    ind_bias_neg  = ifelse(bias < 0, 1, 0),
+    n_bias_pos    = sum(ind_bias_pos),
+    prop_bias_pos = n_bias_pos / 5,
+    n_bias_neg    = sum(ind_bias_neg),
+    prop_bias_neg = n_bias_neg / 5
+  ) %>%
+  ungroup() %>%
+  select(design_id, everything())
+
+fn_save_results(summ_grid)
+fn_save_results(summ_gamma)
+```
+
+
+# OLD previous code  
+
+Just afraid to delete at this point, but if the new ds chunks above work, can remove later.  
+
+```{r summ_tbls, eval=FALSE}
 summ_grid <- all_df %>%
   group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
   summarise(
@@ -655,7 +760,7 @@ fn_save_results(summ_grid)
 ```  
 
 
-```{r gamma_sim_summ}
+```{r gamma_sim_summ, eval=FALSE}
 # ---- Gamma (Part 2 interaction): bias, SE, coverage ----
 # all_df_gamma <- all_df %>%
 #   dplyr::filter(model == "gamma") %>%
@@ -709,7 +814,7 @@ fn_save_results(all_df_gamma_fails_tbl)
 
 ```  
 
-```{r all_df_att}
+```{r all_df_att, eval=FALSE}
 # ---- ATT (RQ4): ATT_hat, ATT_bias, and effect size across treatments ----
 all_df_att <- all_df %>%
   dplyr::filter(model == "ATT") %>%
