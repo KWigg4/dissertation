@@ -230,7 +230,8 @@ all_df_gamma |>
 
 ```  
 
-## 
+## Descr bias on interaction  
+
 
 ```{r descr_bias}
 # Focus on the Gamma Part-2 interaction (can switch to "ATT" later)
@@ -283,7 +284,31 @@ tbl_bias_treatment <- all_df_gamma %>%
   )
 print(tbl_bias_treatment)
 write.csv(tbl_bias_treatment, 
-          here::here("results/tbl_bias_treatment_2026-02-22.csv"))
+          here::here("results/tbl_bias_treatment_2026-02-23.csv"))
+
+tbl_bias_scen <- all_df_gamma %>%
+  dplyr::group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  dplyr::summarise(
+    scenarios        = dplyr::n(),
+    mean_bias        = mean(bias, na.rm = TRUE),
+    sd_bias          = sd(bias, na.rm = TRUE),
+    median_bias      = median(bias, na.rm = TRUE),
+    mad_bias         = mad(bias, na.rm = TRUE),
+    min_bias         = min(bias, na.rm = TRUE),
+    q1_bias          = q_fun(bias, 0.25),
+    q3_bias          = q_fun(bias, 0.75),
+    iqr_bias         = q3_bias - q1_bias,
+    max_bias         = max(bias, na.rm = TRUE),
+    mean_abs_bias    = mean(abs(bias), na.rm = TRUE),
+    share_bias_neg   = mean(bias < 0, na.rm = TRUE),
+    share_bias_pos   = mean(bias > 0, na.rm = TRUE),
+    .groups = "drop"
+  ) |> 
+  arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct)
+print(tbl_bias_scen)
+
+write.csv(tbl_bias_scen, 
+          here::here("results/tbl_bias_scen_2026-02-23.csv"))
 
 gt_bias_treatment <- tbl_bias_treatment %>%
   dplyr::mutate(
@@ -319,7 +344,7 @@ gt_bias_treatment <- tbl_bias_treatment %>%
 
 gtsave(gt_bias_treatment, here::here("results/tbl_bias_treatment.rtf"))
 
-tbl_bias_summ <- 
+
 
 ```  
 
@@ -651,13 +676,15 @@ plot_bias_lollipop <- prep_plot_bias_lollipop |>
     aes(xend = treatment_fct, y = 0, yend = mean_of_means), linewidth = 1.2) +
   geom_point(size = 3) +
   scale_color_manual(values = c("Underestimation (−)" = "#C7372F", "Overestimation (+)" = "#2B6CB0")) +
+  scale_x_discrete(labels = scales::label_wrap(15))+
   labs(
     title = "Gamma Interaction: Average Scenario-Mean Bias by Treatment",
     subtitle = "Positive = overestimation; Negative = underestimation",
     x = NULL, y = "Average of scenario means (bias)"
   ) +
   theme_minimal() +
-  theme(legend.position = "top")
+  theme(legend.position = "top",
+        axis.text.x = element_text(size=9, lineheight=0.9))
 
 plot_bias_lollipop
 ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
@@ -736,6 +763,12 @@ compute_ESE_metrics <- function(df) {
 
       # Ratio of empirical to model SE
       ratio_ese_model = ese / se_model_mean,
+      
+      # MORRIS p 2086
+      # # >1=overcov, <1=undercov
+      ratio_modse_emp = se_model_mean / ese,
+      # % by which model SE misses EmpSE from MORRIS article per Tsai's request
+      rel_error_modse = 100*(se_model_mean / ese-1),
 
       # RMSE of SE estimator
       rmse_se = sqrt(mean((se - ese)^2, na.rm = TRUE)),
@@ -762,136 +795,126 @@ ese_results <- compute_ESE_metrics(all_df_gamma)
 
 fn_save_results(ese_results)
 
-ese_by_treatment <-  ese_results |>
+ese_by_treatment <- ese_results |>
   group_by(treatment_fct) |>
   summarise(
-    mean_ese = mean(ese),
-    median_ese = median(ese),
-    sd_ese = sd(ese),
-    mad_ese = mad(ese),
-    min_ese = min(ese),
-    max_ese = max(ese),
-
-    # calibration across treatments
-    n_treat_under = sum(under_majority_se),
+    # ESE summaries
+    mean_ese        = mean(ese),
+    median_ese      = median(ese),
+    sd_ese          = sd(ese),
+    mad_ese         = mad(ese),
+    min_ese         = min(ese),
+    max_ese         = max(ese),
+    
+    # Morris calibration metrics (averaged across the 27 scenarios per treatment)
+    mean_ratio_modse_emp = mean(ratio_modse_emp),   
+      # avg ModSE/EmpSE; <1 = underest → undercoverage
+      # if close to 1.0 across treatments, model SEs are well-calibrated. Values below 1 mean model is underestimating variability > CIs too narrow > undercoverage (links to RQ3)
+    mean_rel_error_modse = mean(rel_error_modse),   
+      # avg % error; negative = underest → undercoverage
+      # % by which model SE misses EmpSE on average: e.g. 5% means model SE is 5% too small on average. Neg values directly explain undercoverage in RQ3
+    sd_rel_error_modse   = sd(rel_error_modse),     
+      # how consistent is the miscalibration?
+    n_scen_underest      = sum(ratio_modse_emp < 1),  
+      # how many of 27 scenarios underestimate SE
+    prop_scen_underest   = mean(ratio_modse_emp < 1),
+    
+    # Previous calibration flag
+    n_treat_under   = sum(under_majority_se),
     prop_treat_under = mean(under_majority_se),
-
     .groups = "drop"
   )
+
 fn_save_results(ese_by_treatment)
-
-ese_by_treatment_gt <- ese_by_treatment %>%
-  dplyr::mutate(
-    dplyr::across(
-      c(mean_ese, sd_ese, median_ese, mad_ese,
-        min_ese, max_ese, prop_treat_under),
-      ~ scales::number(.x, accuracy = 0.0001)
-    )
-  ) |> 
-  gt()
-ese_by_treatment_gt
-
-
-ese_by_scenario <- ese_results |>
-  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
-  summarise(
-    mean_ese = mean(ese),
-    median_ese = median(ese),
-    sd_ese = sd(ese),
-    mad_ese = mad(ese),
-    min_ese = min(ese),
-    max_ese = max(ese),
-
-    # calibration across treatments
-    n_treat_under = sum(under_majority_se),
-    prop_treat_under = mean(under_majority_se),
-
-    .groups = "drop"
-  )
-
-fn_save_results(ese_by_scenario)
 
 ```    
 
 ```{r ese_plots}
-
+# --- Step 0: build scenario_short ---
 prep_plot_ese <- ese_results |>
   mutate(
-    scenario = glue("p={prop_extreme_fct}, n={nobs_fct}, m={magnitude_fct}"),
-    scenario = factor(scenario)
-  ) |>
-  arrange(nobs_fct, prop_extreme_fct, desc(magnitude_fct), treatment_fct)
+    scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
+  )
 
-x_min <- min(prep_plot_ese$ese, na.rm = TRUE)
-x_max <- max(prep_plot_ese$ese, na.rm = TRUE)
+# --- Step 1: order scenarios by frequency of ESE > 0.25 across all treatments ---
+scenario_order_ese <- prep_plot_ese |>
+  group_by(scenario_short) |>
+  summarise(n_large_ese = sum(ese > 0.25, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_ese)) |>
+  pull(scenario_short)
 
-plots_ese <- prep_plot_ese |>
+# --- Step 2: order treatments by frequency of ESE > 0.25 (worst to best) ---
+treatment_order_ese <- prep_plot_ese |>
+  group_by(treatment_fct) |>
+  summarise(n_large_ese = sum(ese > 0.25, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_ese)) |>
+  pull(treatment_fct)
+
+# --- Step 3: apply ordering and ESE tiers ---
+prep_plot_ese_ordered <- prep_plot_ese |>
   mutate(
-    color_flag = ifelse(ese > 0.25, "high", "low")
-  ) |>
-  group_split(treatment_fct) |>
-  map(~ {
-    trt <- unique(.x$treatment_fct)
+    scenario_short = factor(scenario_short, levels = scenario_order_ese),
+    treatment_fct  = factor(treatment_fct,  levels = treatment_order_ese),
+    ese_tier = case_when(
+      ese > 0.50 ~ ">0.50",
+      ese > 0.25 ~ ">0.25",
+      TRUE       ~ "≤0.25"
+    ),
+    ese_tier = factor(ese_tier, levels = c("≤0.25", ">0.25", ">0.50"))
+  )
 
-    ggplot(.x, aes(x = ese, y = scenario)) +
-      geom_segment(
-        aes(x = 0, xend = ese, y = scenario, yend = scenario),
-        linewidth = 0.6,
-        color = "grey80"
-      ) +
-      geom_point(
-        aes(color = color_flag),
-        size = 2
-      ) +
-      scale_color_manual(
-        values = c(
-          "high" = "red",
-          "low"  = "grey40"
-        ),
-        guide = "none"
-      ) +
-      scale_x_continuous(limits = c(x_min, x_max)) +
-      labs(
-        x = "Empirical SE",
-        y = "Scenario (prop_extreme, nobs, magnitude_level)",
-        title = paste("Lollipop Chart of Empirical SE — Treatment:", trt)
-      ) +
-      theme_minimal(base_size = 12) +
-      theme(
-        panel.grid.major.y = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.text.y = element_text(size = 10),
-        plot.title = element_text(face = "bold"),
-        axis.title.y = element_blank()
-      )
-  })
+ese_y_min <- min(prep_plot_ese_ordered$ese, na.rm = TRUE)
+ese_y_max <- max(prep_plot_ese_ordered$ese, na.rm = TRUE)
 
-plots_ese[[1]]
-plots_ese[[2]]
-plots_ese[[3]]
-plots_ese[[4]]
-plots_ese[[5]]
+# --- Step 4: plot ---
+plot_ese_facet <- prep_plot_ese_ordered |>
+  ggplot(aes(x = scenario_short, y = ese)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
+  geom_segment(
+    aes(x = scenario_short, xend = scenario_short, y = 0, yend = ese),
+    linewidth = 0.5, color = "grey60"
+  ) +
+  geom_point(
+    aes(color = ese_tier),
+    size = 2
+  ) +
+  scale_color_manual(
+    name   = "ESE threshold",
+    values = c(
+      "≤0.25" = "steelblue",
+      ">0.25" = "orange",
+      ">0.50" = "red"
+    )
+  ) +
+  scale_y_continuous(limits = c(ese_y_min, ese_y_max)) +
+  facet_wrap(
+    ~ treatment_fct, nrow = 2,
+    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+  ) +
+  labs(
+    title    = "Gamma Interaction: Scenario-Level Empirical SE by Treatment",
+    subtitle = "Scenarios ordered by frequency of ESE > 0.25; treatments ordered worst to best (left to right, top to bottom)",
+    x        = NULL,
+    y        = "Empirical SE"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor    = element_blank(),
+    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
+    strip.text          = element_text(face = "bold", size = 9),
+    legend.position     = "bottom",
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
+  )
+
+plot_ese_facet
+ggsave(here::here(paste0("figures/gamma_ese_lollipop_facet_", dt, ".png")),
+       plot_ese_facet, width = 16, height = 8, dpi = 300)
 
 ```  
 
-```{r ese_ggridge}
-library(ggridges)
 
-ggplot(ese_results,
-       aes(x = ese, y = treatment_fct, fill = treatment_fct)) +
-  geom_density_ridges(alpha = 0.7) +
-  facet_grid(prop_extreme_fct ~ magnitude_fct + nobs_fct,
-             labeller = label_both) +
-  labs(
-    title = "Empirical SE Distributions by Treatment",
-    x = "Empirical SE",
-    y = "Treatment"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(strip.text = element_text(face = "bold"),
-        legend.position = "none")
-
-```
 
 
 
@@ -925,12 +948,12 @@ tab_cov_treatment <- summ_gamma |>
   )
 write.csv(
   tab_cov_treatment,
-  here::here("results/tab_cov_treatment_2026-02-17.csv")
+  here::here("results/tab_cov_treatment_2026-02-23.csv")
 )
 
-# coverage by scenarios (N=27)
+# coverage by scenarios (N=135)
 tab_cov_scenario <- summ_gamma |>
-  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
   summarise(
     scenarios = dplyr::n(),
     mean_cov = mean(coverage),
@@ -990,7 +1013,7 @@ df_plot <- ggplot(
   theme( axis.text.x = element_text(angle = 25, hjust = 1), 
          plot.title = element_text(face = "bold") )
 
-# Line plot for means by scenario: 
+# Dot plot for means by scenario: 
 
 cov_mean_plot <- tab_cov_scenario |>
   mutate(
@@ -1015,8 +1038,6 @@ ggplot(cov_mean_plot,
     plot.title = element_text(face = "bold"),
     strip.text = element_text(face = "bold")
   )
-
-
 
 cov_plot_scen_prep <- cov_mean_plot |> 
   select(
@@ -1153,80 +1174,227 @@ cat(paste0("- ", sentences, collapse = "\n"))
 ## ATT descr  
 ```{r fn_att_descr}
 
-fn_att_descr <- function(data, dv, group_var = NULL) {
 
-  data |>
-    group_by(across(any_of(group_var))) |>
-    summarise(
-      scenarios   = dplyr::n(),
-      mean        = mean({{ dv }}, na.rm = TRUE),
-      sd          = sd({{ dv }}, na.rm = TRUE),
-      median      = median({{ dv }}, na.rm = TRUE),
-      mad         = mad({{ dv }}, na.rm = TRUE),
-      min         = min({{ dv }}, na.rm = TRUE),
-      q1          = quantile({{ dv }}, 0.25, na.rm = TRUE),
-      q3          = quantile({{ dv }}, 0.75, na.rm = TRUE),
-      iqr         = q3 - q1,
-      max         = max({{ dv }}, na.rm = TRUE),
-      mean_abs    = mean(abs({{ dv }}), na.rm = TRUE),
-      n_neg       = sum({{ dv }}  < 0, na.rm=TRUE),
-      share_neg   = mean({{ dv }} < 0, na.rm = TRUE),
-      n_pos       = sum({{ dv }}  > 0, na.rm=TRUE),
-      share_pos   = mean({{ dv }} > 0, na.rm = TRUE),
-      n_neg_fmt   = paste0(scales::comma(n_neg, accuracy=1),
-                           " (",
-                           scales::percent(share_neg, accuracy=0.1),
-                           ")"),
-      n_pos_fmt   = paste0(scales::comma(n_pos, accuracy=1),
-                           " (",
-                           scales::percent(share_pos, accuracy=0.1),
-                           ")"),
-      .groups = "drop"
-    )
-}
+# ---- ATT descriptives by treatment: estimates and bias ----
 
+# Helper for clean number formatting
+fmt <- function(x) scales::number(x, accuracy = 0.01, big.mark = ",")
+fmt_pct <- function(x) scales::percent(x, accuracy = 0.1)
+
+# Overall 
+# --- Table 0: mean_est overall ------------------
+att_est_overall <- summ_grid_att |>
+  summarise(
+    n_scen        = n(),
+    mean_est_mean   = mean(mean_est, na.rm = TRUE),
+    mean_est_sd     = sd(mean_est, na.rm = TRUE),
+    mean_est_median = median(mean_est, na.rm = TRUE),
+    mean_est_mad    = mad(mean_est, na.rm = TRUE),
+    mean_est_min    = min(mean_est, na.rm = TRUE),
+    mean_est_max    = max(mean_est, na.rm = TRUE),
+    mean_true       = mean(mean_true, na.rm = TRUE),  # should be ~158 for all
+    .groups = "drop"
+  )
+fn_save_results(att_est_overall)
+
+# --- Table 1: mean_est descriptives by treatment ---
+att_est_by_treatment <- summ_grid_att |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_scen        = n(),
+    mean_est_mean   = mean(mean_est, na.rm = TRUE),
+    mean_est_sd     = sd(mean_est, na.rm = TRUE),
+    mean_est_median = median(mean_est, na.rm = TRUE),
+    mean_est_mad    = mad(mean_est, na.rm = TRUE),
+    mean_est_min    = min(mean_est, na.rm = TRUE),
+    mean_est_max    = max(mean_est, na.rm = TRUE),
+    mean_true       = mean(mean_true, na.rm = TRUE),  # should be ~158 for all
+    .groups = "drop"
+  )
+fn_save_results(att_est_by_treatment)
+
+gt_att_est <- att_est_by_treatment |>
+  mutate(across(where(is.numeric), fmt)) |>
+  gt() |>
+  tab_header(
+    title    = "ATT: Descriptives of Mean Estimate by Treatment",
+    subtitle = "Each row averages across 27 scenarios; true ATT ≈ 158"
+  ) |>
+  cols_label(
+    treatment_fct   = "Treatment",
+    n_scen          = "N scenarios",
+    mean_est_mean   = "Mean",
+    mean_est_sd     = "SD",
+    mean_est_median = "Median",
+    mean_est_mad    = "MAD",
+    mean_est_min    = "Min",
+    mean_est_max    = "Max",
+    mean_true       = "Mean true ATT"
+  ) |>
+  tab_options(data_row.padding = px(2))
+
+gt_att_est
+
+# --- Table 2a: ATT bias overall descriptives --- 
+att_bias_overall <- summ_grid_att |>
+  summarise(
+    n_scen          = n(),
+    mean_bias       = mean(bias, na.rm = TRUE),
+    sd_bias         = sd(bias, na.rm = TRUE),
+    median_bias     = median(bias, na.rm = TRUE),
+    mad_bias        = mad(bias, na.rm = TRUE),
+    min_bias        = min(bias, na.rm = TRUE),
+    max_bias        = max(bias, na.rm = TRUE),
+    mean_abs_bias   = mean(abs_bias, na.rm = TRUE),
+    median_abs_bias = median(abs_bias, na.rm = TRUE),
+    n_neg_bias      = sum(bias < 0),
+    prop_neg_bias   = mean(bias < 0)
+  )
+
+fn_save_results(att_bias_overall)
+
+# --- Table 2: bias descriptives by treatment ---
+att_bias_by_treatment <- summ_grid_att |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_scen          = n(),
+    mean_bias       = mean(bias, na.rm = TRUE),
+    sd_bias         = sd(bias, na.rm = TRUE),
+    median_bias     = median(bias, na.rm = TRUE),
+    mad_bias        = mad(bias, na.rm = TRUE),
+    min_bias        = min(bias, na.rm = TRUE),
+    max_bias        = max(bias, na.rm = TRUE),
+    mean_abs_bias   = mean(abs_bias, na.rm = TRUE),
+    median_abs_bias = median(abs_bias, na.rm = TRUE),
+    n_neg_bias      = sum(bias < 0),
+    prop_neg_bias   = mean(bias < 0),
+    .groups = "drop"
+  )
+
+fn_save_results(att_bias_by_treatment)
+
+gt_att_bias <- att_bias_by_treatment |>
+  mutate(
+    across(c(mean_bias, sd_bias, median_bias, mad_bias,
+             min_bias, max_bias, mean_abs_bias, median_abs_bias), fmt),
+    prop_neg_bias = fmt_pct(prop_neg_bias)
+  ) |>
+  gt() |>
+  tab_header(
+    title    = "ATT: Descriptives of Bias by Treatment",
+    subtitle = "Bias = mean_est − true ATT; each row averages across 27 scenarios"
+  ) |>
+  cols_label(
+    treatment_fct   = "Treatment",
+    n_scen          = "N scenarios",
+    mean_bias       = "Mean bias",
+    sd_bias         = "SD bias",
+    median_bias     = "Median bias",
+    mad_bias        = "MAD bias",
+    min_bias        = "Min bias",
+    max_bias        = "Max bias",
+    mean_abs_bias   = "Mean |bias|",
+    median_abs_bias = "Median |bias|",
+    n_neg_bias      = "N scen negative",
+    prop_neg_bias   = "% scen negative"
+  ) |>
+  tab_options(data_row.padding = px(2))
+
+gt_att_bias
+
+# Save both
+gtsave(gt_att_est,  here::here("results/tbl_att_est_by_treatment.rtf"))
+gtsave(gt_att_bias, here::here("results/tbl_att_bias_by_treatment.rtf"))
 
 ```  
 
-```{r att_est_descrs}
-att_est_descr <- fn_att_descr(all_df_att, dv=est)
+```{r plot_att_bias}
+# --- Step 0: build scenario_short ---
+prep_plot_att_bias <- summ_grid_att |>
+  mutate(
+    scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
+  )
 
-att_est_descr_treat <- fn_att_descr(
-  all_df_att, dv=est, group_var = "treatment_fct")
+# --- Step 1: order scenarios by frequency of |bias| > 50 across all treatments ---
+scenario_order_att <- prep_plot_att_bias |>
+  group_by(scenario_short) |>
+  summarise(n_large_bias = sum(abs(bias) > 50, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_bias)) |>
+  pull(scenario_short)
 
-att_est_descr_cond <- fn_att_descr(
-  all_df_att, dv=est, group_var = c("nobs_fct","prop_extreme_fct", "magnitude_fct")
-)
+# --- Step 2: order treatments by frequency of |bias| > 100 (worst to best) ---
+treatment_order_att <- prep_plot_att_bias |>
+  group_by(treatment_fct) |>
+  summarise(n_large_bias = sum(abs(bias) > 100, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_bias)) |>
+  pull(treatment_fct)
 
-att_est_desc_scenario <- fn_att_descr(
-  all_df_att, dv=est, group_var = c("treatment_fct","nobs_fct","prop_extreme_fct", "magnitude_fct")
-)
+# --- Step 3: apply ordering and bias tiers ---
+prep_plot_att_bias_ordered <- prep_plot_att_bias |>
+  mutate(
+    scenario_short = factor(scenario_short, levels = scenario_order_att),
+    treatment_fct  = factor(treatment_fct,  levels = treatment_order_att),
+    bias_tier = case_when(
+      abs(bias) > 500  ~ ">|500|",
+      abs(bias) > 100  ~ ">|100|",
+      TRUE             ~ "≤|100|"
+    ),
+    bias_tier = factor(bias_tier, levels = c("≤|100|", ">|100|", ">|500|"))
+  )
 
-fn_save_results(att_est_descr)
-fn_save_results(att_est_descr_treat)
-fn_save_results(att_est_descr_cond)
-fn_save_results(att_est_desc_scenario)
+att_y_min <- min(prep_plot_att_bias_ordered$bias, na.rm = TRUE)
+att_y_max <- max(prep_plot_att_bias_ordered$bias, na.rm = TRUE)
+
+# --- Step 4: plot ---
+plot_att_bias_facet <- prep_plot_att_bias_ordered |>
+  ggplot(aes(x = scenario_short, y = bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
+  geom_segment(
+    aes(x = scenario_short, xend = scenario_short, y = 0, yend = bias),
+    linewidth = 0.5, color = "grey60"
+  ) +
+  geom_point(
+    aes(color = bias_tier),
+    size = 2
+  ) +
+  scale_color_manual(
+    name   = "|Bias| threshold",
+    values = c(
+      "≤|100|" = "steelblue",
+      ">|100|" = "orange",
+      ">|500|" = "red"
+    )
+  ) +
+  scale_y_continuous(limits = c(att_y_min, att_y_max)) +
+  facet_wrap(
+    ~ treatment_fct, nrow = 2,
+    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+  ) +
+  labs(
+    title    = "ATT: Scenario-Level Bias by Treatment",
+    subtitle = "Scenarios ordered by frequency of |bias| > 50; treatments ordered worst to best (left to right, top to bottom)",
+    x        = NULL,
+    y        = "Bias (ATT scale)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor    = element_blank(),
+    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
+    strip.text          = element_text(face = "bold", size = 9),
+    legend.position     = "bottom",
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
+  )
+
+plot_att_bias_facet
+ggsave(here::here(paste0("figures/att_bias_lollipop_facet_", dt, ".png")),
+       plot_att_bias_facet, width = 16, height = 8, dpi = 300)
+
 ```
 
-```{r att_bias_descrs}
-att_bias_descr <- fn_att_descr(all_df_att, dv=bias)
 
-att_bias_descr_treat <- fn_att_descr(
-  all_df_att, dv=bias, group_var = "treatment_fct")
 
-att_bias_descr_cond <- fn_att_descr(
-  all_df_att, dv=bias, group_var = c("nobs_fct","prop_extreme_fct", "magnitude_fct")
-)
-
-att_bias_desc_scenario <- fn_att_descr(
-  all_df_att, dv=bias, group_var = c("treatment_fct","nobs_fct","prop_extreme_fct", "magnitude_fct")
-)
-
-fn_save_results(att_bias_descr)
-fn_save_results(att_bias_descr_treat)
-fn_save_results(att_bias_descr_cond)
-fn_save_results(att_bias_desc_scenario)
-```
 
 ##4 FULL-FACTORIAL ANOVA (RQ answers)
 
