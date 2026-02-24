@@ -47,142 +47,174 @@ fn_save_results <- function(df) {
   write.csv(df,here::here(paste0("results/",name,"_",dt, ".csv")))
 }
 
+# Reads datasets created on 02-21:
+fn_readRDS <- function(ds) {
+  ds <- deparse(substitute(ds))
+  readRDS(here::here(paste0("results/",ds,"_2026-02-21.RDS")))
+}
+
 # Helper for quantiles
 q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
 ```  
 
-```{r get_data_alldf}
 
-all_df <- readRDS(here::here("results/all_df_2026-02-06.RDS"))
+```{r get_replicates}
 
-# Can't do this on all_df and then subset there because that doesn't have cover_ind for some reason. Whatever. 
-all_df_gamma <- readRDS(here::here("results/all_df_gamma_2026-02-09.RDS")) %>% 
+## Used for analysis, the successful gammas at the replicate level:
+all_df_gamma <- fn_readRDS(all_df_gamma) |> 
+  relocate(nobs_fct, .after = nobs) |> 
+  relocate(prop_extreme_fct, .after=prop_extreme) |> 
+  relocate(magnitude_fct, .after=magnitude_level) |> 
+  relocate(treatment_fct, .after=treatment)
+## N=67,371
+
+## All n=67500 expected replicates with failure status:
+all_df_gamma_w_fails <- fn_readRDS(all_df_gamma_w_fails)
+
+## Only the failures (N=129): 
+all_df_gamma_fails <- fn_readRDS(all_df_gamma_fails)
+
+# ATT
+## 
+all_df_att <- fn_readRDS(all_df_att)
+
+```   
+
+```{r fails}
+failure_log <- read.csv(here::here("results/failure_log_2026-02-21.csv")) %>%
+  # n_failures is numeric in real rows and blank/text in notes rows
+  filter(!is.na(n_failures), !is.na(magnitude_level)) %>%
   mutate(
-    nobs_fct = factor(
-      nobs,
-      levels = c("5000","10000","20000"),
-      labels = c("5,000","10,000","20,000")),
-    prop_extreme_fct = factor(
-      prop_extreme,
-      levels = c("0.01","0.05","0.1"),
-      labels = c("0.01", "0.05", "0.1")),
-    magnitude_fct = factor(
-      magnitude_level,
-      levels = c(1,2,3),
-      labels = c(1, 2, 3)),
-    treatment_fct = factor(
-      treatment,
-      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
-      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
-                 "Median-preserved top-coding", "Truncation"))
-    ) %>%
-  # mutate(
-  #   across(c(est, se, bias), ~round(.x, 4))) |> 
-  # just reorder and remove n
-  select(model, est, se, true, bias, 
-         nobs, nobs_fct, 
-         prop_extreme, prop_extreme_fct,
-         magnitude_level, magnitude_fct,
-         treatment, treatment_fct,
-         cover_ind, gamma_shape,
-         everything())
-
-all_df_att <- readRDS(here::here("results/all_df_att_2026-02-09.RDS")) %>% 
-  # remove the ones that are NA
-  filter(!is.na(est)) |> 
-  mutate(n=as.numeric(as.character(n))) |> 
-  mutate(nobs=n*2) |> 
-  mutate(abs_bias = abs(bias)) |> 
-  mutate(
-    nobs_fct = factor(
-      nobs,
-      levels = c("5000","10000","20000"),
-      labels = c("5,000","10,000","20,000")),
-    prop_extreme_fct = factor(
-      prop_extreme,
-      levels = c("0.01","0.05","0.1"),
+    n    = as.numeric(n),
+    nobs = n * 2,
+    nobs_fct = factor(nobs,
+      levels = c(5000, 10000, 20000),
+      labels = c("5,000", "10,000", "20,000")),
+    magnitude_fct = factor(magnitude_level,
+      levels = c(1, 2, 3),
+      labels = c("1 ($50K–$1M)", "2 ($50K–$2M)", "3 ($50K–$3M)")),
+    prop_extreme_fct = factor(prop_extreme,
+      levels = c(0.01, 0.05, 0.10),
       labels = c("0.01", "0.05", "0.10")),
-    magnitude_fct = factor(
-      magnitude_level,
-      levels = c(1,2,3),
-      labels = c(1, 2, 3)),
-    treatment_fct = factor(
-      treatment,
-      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
-      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
-                 "Median-preserved top-coding", "Truncation"))
-    ) %>%
-  # mutate(
-  #   across(c(est, se, bias), ~round(.x, 4))) |> 
-  select(-c(se, d_est, d_true, d_bias, n, gamma_shape)) |> 
-  # just reorder and remove n
-  select(model, est, true, bias, abs_bias,
-         nobs, nobs_fct, 
-         prop_extreme, prop_extreme_fct,
-         magnitude_level, magnitude_fct,
-         treatment, treatment_fct,
-         everything()) 
+    error_type = case_when(
+      grepl("step size",        gamma_error) ~ "Step size truncated",
+      grepl("did not converge", gamma_error) ~ "Did not converge",
+      grepl("NA/NaN/Inf",       gamma_error) ~ "NA/NaN/Inf in x"
+    )
+  )
+```
 
-```  
 
 ```{r get_summ_grid}
 
 # Get design id and n_design from summ_gamma 
-design_elements <- readRDS(here::here("results/summ_gamma_2026-02-09.RDS")) |> 
+design_elements <- fn_readRDS(summ_gamma) |> 
   select(
-    n, nobs, prop_extreme, magnitude_level, treatment, design_id, n_design) |> 
+    nobs, prop_extreme, magnitude_level, treatment, design_id) |> 
   # won't join if you don't change this back to character.
   mutate(treatment=as.character(treatment))
   
-summ_grid  <- readRDS(here::here("results/summ_grid_2026-02-09.RDS")) |> 
+summ_grid  <- fn_readRDS(summ_grid) |> 
   left_join(
     design_elements, 
-    by = c("treatment", "n", "prop_extreme", "magnitude_level")) |> 
-  mutate(
-    nobs=n*2,
-    nobs_fct = factor(
-      nobs,
-      levels = c("5000","10000","20000"),
-      labels = c("5,000","10,000","20,000")),
-    prop_extreme_fct = factor(
-      prop_extreme,
-      levels = c("0.01","0.05","0.1"),
-      labels = c("0.01", "0.05", "0.1")),
-    magnitude_fct = factor(
-      magnitude_level,
-      levels = c(1,2,3),
-      labels = c(1, 2, 3)),
-    treatment_fct = factor(
-      treatment,
-      levels = c("raw","topcode", "mean_adj","median_adj","truncate"),
-      labels = c("No treatment", "Top-coding","Mean-preserved top-coding",
-                 "Median-preserved top-coding", "Truncation"))
-    ) %>%
-  # mutate(
-  #   across(c(mean_est, bias, emp_se, rmse, coverage), ~round(.x, 4))) |> 
-  # just reorder and remove n
-  select(design_id, n_design, model, 
+    by = c("treatment", "nobs", "prop_extreme", "magnitude_level")) |> 
+  select(design_id, model, 
          nobs, nobs_fct, 
          prop_extreme, prop_extreme_fct,
          magnitude_level, magnitude_fct,
          treatment, treatment_fct,
          everything()) |> 
-  select(-c(d_mean, d_bias, d_emp_se, n)) |> 
   mutate(
     scen_id = paste0(
       "prop=", prop_extreme_fct, " | mag=", magnitude_fct, " | n=", nobs_fct),
-    abs_bias = abs(bias)
   )
 
 summ_gamma <- summ_grid |> 
   filter(model == "gamma") 
 
-# Make your own for this because you need abs_bias from all_df_att
+# Make your own for this (later) because you need abs_bias from all_df_att
 # summ_att <- summ_grid |> 
-#   filter(model=="ATT") 
+#   filter(model=="ATT")
   
-```
+```  
+
+## Failures  
+
+```{r}
+# Total N for percentages
+total_failures <- sum(failure_log$n_failures)  # 129
+total_reps     <- 67500                         # B=500 * 135 scenarios * 1 model
+
+# --- Table 1: By error type ---
+tbl_by_error <- failure_log %>%
+  group_by(error_type) %>%
+  summarise(n = sum(n_failures), .groups = "drop") %>%
+  mutate(
+    pct_of_failures = scales::percent(n / total_failures, accuracy = 0.1),
+    pct_of_all_reps = scales::percent(n / total_reps,     accuracy = 0.2)
+  )
+
+# --- Table 2: By condition ---
+tbl_by_condition <- failure_log %>%
+  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  summarise(n = sum(n_failures), .groups = "drop") %>%
+  mutate(
+    pct_of_failures = scales::percent(n / total_failures, accuracy = 0.1),
+    pct_of_500      = scales::percent(n / 500,            accuracy = 0.1)
+  ) %>%
+  arrange(nobs_fct, prop_extreme_fct, magnitude_fct)
+
+write.csv(tbl_by_condition,
+          here::here("results/tbl_failures_condition_2026-02-22.csv"))
+
+# --- Table 3: All -------
+tbl_reasons_conditions <- failure_log |> 
+  group_by(nobs_fct, prop_extreme_fct, magnitude_fct, error_type) %>%
+  summarize(n_fails=sum(n_failures), .groups="drop") |> 
+  mutate(
+    pct_of_failures = scales::percent(n_fails / total_failures, accuracy = 0.1),
+    pct_of_500      = scales::percent(n_fails / 500,            accuracy = 0.1)
+  ) %>%
+  arrange(error_type, nobs_fct, prop_extreme_fct, magnitude_fct)
+write.csv(tbl_reasons_conditions,
+          here::here("results/tbl_failures_reason_condition_2026-02-22.csv"))
+# --- GT table combining both ---
+tbl_by_error %>%
+  gt() %>%
+  tab_header(
+    title    = "Gamma Model Convergence Failures",
+    subtitle = glue("Total: {total_failures} failures across 67,500 replications (0.19%)")
+  ) %>%
+  cols_label(
+    error_type      = "Failure Type",
+    n               = "N Failures",
+    pct_of_failures = "% of Failures",
+    pct_of_all_reps = "% of All Reps"
+  ) %>%
+  tab_source_note(
+    "All failures occurred in raw (untreated) condition only. 
+     No failures in top-coding, mean-adj, median-adj, or truncation."
+  )
+
+tbl_by_condition %>%
+  gt() %>%
+  tab_header(
+    title    = "Failures by Simulation Condition",
+    subtitle = "% of 500 reps = failure rate within that condition"
+  ) %>%
+  cols_label(
+    nobs_fct         = "N (obs)",
+    prop_extreme_fct = "Prop. Extreme",
+    magnitude_fct    = "Magnitude",
+    n                = "N Failures",
+    pct_of_failures  = "% of All Failures",
+    pct_of_500       = "% of 500 Reps"
+  )
+
+
+```  
+
 
 
 ```{r}
@@ -196,9 +228,7 @@ all_df_gamma |>
   dplyr::count(nobs, prop_extreme, magnitude_level, treatment) |>
   dplyr::count(nobs)
 
-```
-
-
+```  
 
 ## 
 

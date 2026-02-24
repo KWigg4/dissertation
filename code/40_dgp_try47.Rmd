@@ -408,6 +408,7 @@ dat_example <- simulate_panel_data(
   gamma_shape = 3,
   COEF = COEF
 )
+fn_save_results(dat_example)
 
 # Descriptives, Table One 
 # Helper for quantiles
@@ -428,6 +429,7 @@ tab_y_example <- dat_example %>%
     max         = max(TOTEXPYY, na.rm = TRUE),
     .groups = "drop"
   )
+fn_save_results(tab_y_example)
 
 dat_example |> 
 	select(
@@ -468,6 +470,7 @@ print(p1); print(p2)
 fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
                  data = dat_example, family = binomial)
 
+
 fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
                  data = dat_example %>% filter(ind_gt0 == 1),
                  family = Gamma(link = "log"))
@@ -475,7 +478,35 @@ fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
 summary(fit_logit)
 summary(fit_gamma)
 
+```  
+
+```{r validation_ex}
+
+validation <- tibble(
+  parameter       = c("P(Y>0) intercept", "Post", "Treatment", 
+                       "Interaction", "Female", "Hispanic", "zPCS",
+                       "P(treated)", "P(female)", "P(Hispanic)",
+                       "Prop. positive (ind_gt0)", "Prop. extreme"),
+  dgp_truth       = c(0.0, 0.2, -0.2, 0.0, 1.2, -0.8, -0.2,
+                       0.5, 0.5, 0.2,
+                       plogis(0.0),  # theoretical P(Y>0) at covariate means
+                       0.01),
+  empirical_value = c(
+    # pull from coef(fit_logit) for first 7
+    unname(coef(fit_logit)),
+    # then compute from dat_example
+    mean(dat_example$ind_tx),
+    mean(dat_example$ind_female),
+    mean(dat_example$HISPANX),
+    mean(dat_example$ind_gt0),
+    mean(dat_example$extreme_flag)
+  )
+)
+print(validation)
 ```
+
+```
+
 
 #Step 2: Full Monte Carlo across scenarios
 ```{r full_mc}

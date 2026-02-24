@@ -558,7 +558,7 @@ write.csv(failure_log,
 
 ```{r}
 # If needed, can re-enter all_df
-# all_df <- readRDS(here::here("results/all_df_2026-02-06.RDS"))
+# all_df <- readRDS(here::here("results/all_df_2026-02-21.RDS"))
 ```  
 
 
@@ -625,6 +625,7 @@ all_df_gamma_fails_tbl <- all_df_gamma_fails %>%
   mutate(prop_of_500 = n / 500)
 
 fn_save_results(all_df_gamma)
+fn_save_results(all_df_gamma_w_fails)
 fn_save_results(all_df_gamma_fails)
 fn_save_results(all_df_gamma_fails_tbl)
 ```  
@@ -815,15 +816,22 @@ fn_save_results(all_df_gamma_fails_tbl)
 ```  
 
 ```{r all_df_att, eval=FALSE}
-# ---- ATT (RQ4): ATT_hat, ATT_bias, and effect size across treatments ----
+# ---- ATT (RQ4): ATT_hat, ATT_bias, att_abs_bias ----
 all_df_att <- all_df %>%
-  dplyr::filter(model == "ATT") %>%
-  dplyr::mutate(
-    n = factor(n),
-    prop_extreme = factor(prop_extreme),
-    magnitude_level = factor(magnitude_level),
-    treatment = factor(treatment)
-  )
+  filter(model == "ATT", !is.na(est)) %>%
+  mutate(
+    nobs     = n * 2,
+    abs_bias = abs(bias)
+  ) %>%
+  add_factors() %>%
+  select(-c(se, n, gamma_shape, failed, logit_error, gamma_error)) %>%
+  select(model, est, true, bias, abs_bias,
+         nobs, nobs_fct,
+         prop_extreme, prop_extreme_fct,
+         magnitude_level, magnitude_fct,
+         treatment, treatment_fct,
+         everything())
+
 fn_save_results(all_df_att)
 ```
 
