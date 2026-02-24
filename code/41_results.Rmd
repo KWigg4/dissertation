@@ -489,46 +489,6 @@ tab_27 |>
   ) |> 
   gt() |> 
   gtsave(here::here("results/tab_27.rtf"))
-
-
-plots_bias <- prep_plot_bias_over_under |> 
-  group_split(treatment_fct) |> 
-  map(~ { 
-    trt <- unique(.x$treatment_fct)
-
-    ggplot(.x, aes(x = bias, y = scenario)) +
-      geom_segment(
-        aes(x = 0, xend = bias, y = scenario, yend = scenario),
-        linewidth = 0.6, color = "grey60"
-      ) +
-      geom_point(
-        aes(color = abs(bias) > 0.04),
-        size = 2
-      ) +
-      scale_color_manual(
-        values = c(`TRUE` = "red", `FALSE` = "steelblue"),
-        guide = "none"
-      ) +
-      scale_x_continuous(limits = c(x_min, x_max)) +
-      labs(
-        x = "Bias",
-        y = "Scenario (prop_extreme, nobs, magnitude_level)",
-        title = paste("Bias — Treatment:", trt),
-        subtitle = "Values >|0.04| are red"
-      ) +
-      theme_minimal(base_size = 12) +
-      theme(
-        panel.grid.major.y = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.text.y = element_text(size = 10),
-        axis.title.y = element_blank(),
-        plot.title = element_text(face = "bold", hjust = 0),
-        plot.title.position = "plot"   # left-align title with y-axis
-      )
-  })
-
-plots_bias[[1]]
-plots_bias
 ```  
 
 ```{r scenario_lolli_2}
@@ -692,7 +652,8 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 ```  
 
 
-### Trend lines for how bias change with mag of extremes, prop of extremes 
+### Jitter plot for how bias changes across conditions  
+
 ```{r bias_jitter}
 # --- Trend lines including n as a scenario condition ---
 # Treat magnitude level as numeric for trend fitting
@@ -750,78 +711,81 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 ```{r descr_empse}
 
 compute_ESE_metrics <- function(df) {
-
+  
   df |>
     group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
     summarise(
-      # Empirical standard error
-      ese = sd(est, na.rm = TRUE),
 
-      # Model-based SE summaries
-      se_model_mean = mean(se, na.rm = TRUE),
+      # --- Core ESE (one value per scenario-treatment cell) ---
+      ese             = sd(est, na.rm = TRUE),
+      mcse_ese        = sd(est, na.rm = TRUE) / sqrt(n()),  # MC uncertainty of ESE itself
+
+      # --- Model SE summaries (averaged across reps in cell) ---
+      se_model_mean   = mean(se, na.rm = TRUE),
       se_model_median = median(se, na.rm = TRUE),
 
-      # Ratio of empirical to model SE
-      ratio_ese_model = ese / se_model_mean,
-      
-      # MORRIS p 2086
-      # # >1=overcov, <1=undercov
-      ratio_modse_emp = se_model_mean / ese,
-      # % by which model SE misses EmpSE from MORRIS article per Tsai's request
-      rel_error_modse = 100*(se_model_mean / ese-1),
+      # --- Morris (2019) calibration metrics ---
+      ratio_modse_emp  = se_model_mean / ese,               # <1 = underest; >1 = overest
+      rel_error_modse  = 100 * (se_model_mean / ese - 1),   # % error; negative = underest
+      rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
 
-      # RMSE of SE estimator
-      rmse_se = sqrt(mean((se - ese)^2, na.rm = TRUE)),
-
-      # Monte Carlo standard error of ESE
-      mcse_ese = sd(est, na.rm = TRUE) / sqrt(n()),
-
-      # Distribution summaries of ESE across reps
-      ese_min = min(est, na.rm = TRUE),
-      ese_max = max(est, na.rm = TRUE),
-      ese_median = median(est, na.rm = TRUE),
-      ese_mad = mad(est, na.rm = TRUE),
-
-      # Under/over calibration
-      prop_under_se = mean(se < ese, na.rm = TRUE),
+      # --- Replicate-level SE calibration flag ---
+      prop_under_se     = mean(se < ese, na.rm = TRUE),     # proportion of reps where ModSE < ESE
       under_majority_se = prop_under_se > 0.5,
+
+      # --- Descriptives of the ESTIMATE distribution (not ESE) ---
+      # Renamed clearly so they're not confused with ESE summaries
+      est_mean   = mean(est, na.rm = TRUE),
+      est_median = median(est, na.rm = TRUE),
+      est_sd     = sd(est, na.rm = TRUE),       # same as ese, kept for clarity
+      est_mad    = mad(est, na.rm = TRUE),
+      est_min    = min(est, na.rm = TRUE),
+      est_max    = max(est, na.rm = TRUE),
 
       .groups = "drop"
     )
 }
 
-ese_results <- compute_ESE_metrics(all_df_gamma) 
-# N=135 (all scenarios*treatment)
-
+ese_results <- compute_ESE_metrics(all_df_gamma)
 fn_save_results(ese_results)
 
+# ---- ese_by_treatment: aggregate 135 scenario cells → 5 treatment rows ----
 ese_by_treatment <- ese_results |>
   group_by(treatment_fct) |>
   summarise(
-    # ESE summaries
-    mean_ese        = mean(ese),
-    median_ese      = median(ese),
-    sd_ese          = sd(ese),
-    mad_ese         = mad(ese),
-    min_ese         = min(ese),
-    max_ese         = max(ese),
+    n_scen = n(),   # should be 27 for each treatment
+
+    # --- ESE summaries across 27 scenarios ---
+    mean_ese   = mean(ese),
+    median_ese = median(ese),
+    sd_ese     = sd(ese),
+    mad_ese    = mad(ese),
+    min_ese    = min(ese),
+    max_ese    = max(ese),
+
+    # --- Morris calibration metrics across 27 scenarios ---
     
-    # Morris calibration metrics (averaged across the 27 scenarios per treatment)
-    mean_ratio_modse_emp = mean(ratio_modse_emp),   
-      # avg ModSE/EmpSE; <1 = underest → undercoverage
+    mean_ratio_modse_emp = mean(ratio_modse_emp),
+    # ratio: avg ModSE/EmpSE; close to 1 = well calibrated
+    # ratio: avg ModSE/EmpSE; <1 = underest → undercoverage
       # if close to 1.0 across treatments, model SEs are well-calibrated. Values below 1 mean model is underestimating variability > CIs too narrow > undercoverage (links to RQ3)
-    mean_rel_error_modse = mean(rel_error_modse),   
-      # avg % error; negative = underest → undercoverage
-      # % by which model SE misses EmpSE on average: e.g. 5% means model SE is 5% too small on average. Neg values directly explain undercoverage in RQ3
-    sd_rel_error_modse   = sd(rel_error_modse),     
-      # how consistent is the miscalibration?
-    n_scen_underest      = sum(ratio_modse_emp < 1),  
-      # how many of 27 scenarios underestimate SE
-    prop_scen_underest   = mean(ratio_modse_emp < 1),
     
-    # Previous calibration flag
-    n_treat_under   = sum(under_majority_se),
-    prop_treat_under = mean(under_majority_se),
+    mean_rel_error_modse = mean(rel_error_modse),
+    # % avg error: negative = model underestimates SE → CIs too narrow → undercoverage (RQ3 link)
+    # % by which model SE misses EmpSE on average: e.g. 5% means model SE is 5% too small on average. Neg values directly explain undercoverage in RQ3
+    
+    sd_rel_error_modse   = sd(rel_error_modse),   
+    # consistency of miscalibration
+    
+    n_scen_underest      = sum(ratio_modse_emp < 1),
+    # how many of 27 scenarios have ModSE < ESE (underestimation)
+    prop_scen_underest   = mean(ratio_modse_emp < 1),
+
+    # --- Majority-underestimation flag ---
+    # "in how many scenarios did the model underestimate SE in >50% of reps?"
+    n_scen_under_majority  = sum(under_majority_se),
+    prop_scen_under_majority = mean(under_majority_se),
+
     .groups = "drop"
   )
 
@@ -1433,8 +1397,11 @@ type3_anova <- car::Anova(model, type = "III")
 # Extract Type III results
 type3_df <- type3_anova %>%
   as.data.frame() %>%
-  rownames_to_column("Term") %>%
+  tibble::rownames_to_column("Term") %>%
   filter(Term != "Residuals")
+
+eta2_regular <- effectsize::eta_squared(type3_anova, partial=FALSE)
+eta2_partial <- effectsize::eta_squared(type3_anova, partial=TRUE)
 
 # Extract regular eta²
 eta2_reg_df <- eta2_regular %>%
@@ -1479,22 +1446,8 @@ write.csv(combined_table,
           here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
           row.names = FALSE)
 
-# 6: Pub ready tbl ===========================================
-# (Simple version)
 
-combined_table %>%
-  kable(
-    caption = "Type III ANOVA with Effect Sizes: Gamma Model Bias. Note: η² = eta-squared; η²p = partial eta-squared. Effect size benchmarks: small (0.01), medium (0.06), large (0.14).",
-    digits = c(0, 0, 6, 2, 4, 5, 5, 0),
-    col.names = c("Effect", "df", "Sum Sq", "F", "p", "η²", "η²p", "Interpretation"),
-    align = c("l", "r", "r", "r", "r", "r", "r", "l")
-  ) %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover", "condensed"),
-    full_width = FALSE
-  )
-
-# 7: id sig, large es =========================================
+# id sig, large es =========================================
 # Identify Significant Effects and Large Effect Sizes
 
 significant_effects <- combined_table %>%
@@ -1543,81 +1496,184 @@ cat("random sampling variability, not systematic differences between conditions.
 # Opt: Post hocs ==============================================
 # OPTIONAL: Post-hoc tests for significant main effects
 
-library(emmeans)
+# library(emmeans)
+# 
+# # Only run post-hoc if effect is significant AND at least small
+# sig_main_effects <- significant_effects %>%
+#   filter(!grepl(":", Term)) %>%  # Only main effects, not interactions
+#   filter(Eta2_partial >= 0.001)  # At least 0.1% variance explained
+# 
+# if ("treatment" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Treatment ===\n")
+#   emm_treatment <- emmeans(model, ~ treatment)
+#   pairs_treatment <- pairs(emm_treatment, adjust = "tukey")
+#   print(pairs_treatment)
+#   
+#   # Save post-hoc results
+#   write.csv(as.data.frame(pairs_treatment),
+#             file = paste0("results/posthoc_treatment_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# if ("prop_extreme" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Proportion Extreme ===\n")
+#   emm_prop <- emmeans(model, ~ prop_extreme)
+#   pairs_prop <- pairs(emm_prop, adjust = "tukey")
+#   print(pairs_prop)
+#   
+#   write.csv(as.data.frame(pairs_prop),
+#             file = paste0("results/posthoc_prop_extreme_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# if ("magnitude_level" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Magnitude Level ===\n")
+#   emm_mag <- emmeans(model, ~ magnitude_level)
+#   pairs_mag <- pairs(emm_mag, adjust = "tukey")
+#   print(pairs_mag)
+#   
+#   write.csv(as.data.frame(pairs_mag),
+#             file = paste0("results/posthoc_magnitude_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# # Opt: Check assumptions =====================================
+# # OPTIONAL: Check ANOVA assumptions
+# 
+# cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
+# 
+# # 1. Normality of residuals (sample if too large)
+# if (nrow(all_df_gamma) > 5000) {
+#   shapiro_test <- shapiro.test(sample(residuals(model), 5000))
+#   cat("Shapiro-Wilk test for normality (n=5000 sample): W =", 
+#       round(shapiro_test$statistic, 4), 
+#       ", p =", format.pval(shapiro_test$p.value), "\n")
+# } else {
+#   shapiro_test <- shapiro.test(residuals(model))
+#   cat("Shapiro-Wilk test for normality: W =", 
+#       round(shapiro_test$statistic, 4), 
+#       ", p =", format.pval(shapiro_test$p.value), "\n")
+# }
+# 
+# # 2. Homogeneity of variance (Levene's test)
+# levene_test <- car::leveneTest(bias ~ treatment * n * prop_extreme * magnitude_level, 
+#                                data = all_df_gamma)
+# cat("Levene's test for homogeneity: F =", round(levene_test$`F value`[1], 4),
+#     ", p =", format.pval(levene_test$`Pr(>F)`[1]), "\n")
+# 
+# # 3. Diagnostic plots
+# png(paste0("figures/anova_diagnostics_", dt, ".png"), 
+#     width = 10, height = 8, units = "in", res = 300)
+# par(mfrow = c(2, 2))
+# plot(model)
+# dev.off()
 
-# Only run post-hoc if effect is significant AND at least small
-sig_main_effects <- significant_effects %>%
-  filter(!grepl(":", Term)) %>%  # Only main effects, not interactions
-  filter(Eta2_partial >= 0.001)  # At least 0.1% variance explained
+# cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
 
-if ("treatment" %in% sig_main_effects$Term) {
-  cat("\n=== POST-HOC: Pairwise Comparisons for Treatment ===\n")
-  emm_treatment <- emmeans(model, ~ treatment)
-  pairs_treatment <- pairs(emm_treatment, adjust = "tukey")
-  print(pairs_treatment)
-  
-  # Save post-hoc results
-  write.csv(as.data.frame(pairs_treatment),
-            file = paste0("results/posthoc_treatment_", dt, ".csv"),
-            row.names = FALSE)
-}
+# Plot significant interactions: 
+# --- Shared theme and color scale for both plots ---
+trt_colors <- c(
+  "No treatment"                = "#0072B2",
+  "Top-coding"                  = "#E69F00",
+  "Mean-preserved top-coding"   = "#009E73",
+  "Median-preserved top-coding" = "#CC79A7",
+  "Truncation"                  = "#D55E00"
+)
 
-if ("prop_extreme" %in% sig_main_effects$Term) {
-  cat("\n=== POST-HOC: Pairwise Comparisons for Proportion Extreme ===\n")
-  emm_prop <- emmeans(model, ~ prop_extreme)
-  pairs_prop <- pairs(emm_prop, adjust = "tukey")
-  print(pairs_prop)
-  
-  write.csv(as.data.frame(pairs_prop),
-            file = paste0("results/posthoc_prop_extreme_", dt, ".csv"),
-            row.names = FALSE)
-}
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    legend.position     = "bottom",
+    legend.title        = element_text(face = "bold"),
+    strip.text          = element_text(face = "bold"),
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    plot.subtitle       = element_text(color = "grey40", size = 9),
+    panel.grid.minor    = element_blank()
+  )
 
-if ("magnitude_level" %in% sig_main_effects$Term) {
-  cat("\n=== POST-HOC: Pairwise Comparisons for Magnitude Level ===\n")
-  emm_mag <- emmeans(model, ~ magnitude_level)
-  pairs_mag <- pairs(emm_mag, adjust = "tukey")
-  print(pairs_mag)
-  
-  write.csv(as.data.frame(pairs_mag),
-            file = paste0("results/posthoc_magnitude_", dt, ".csv"),
-            row.names = FALSE)
-}
+# ---- Shared mean + SE summaries ----
+means_trt_nobs <- all_df_gamma |>
+  group_by(treatment_fct, nobs_fct) |>
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
+    .groups   = "drop"
+  )
 
-# Opt: Check assumptions =====================================
-# OPTIONAL: Check ANOVA assumptions
+means_trt_prop <- all_df_gamma |>
+  group_by(treatment_fct, prop_extreme_fct) |>
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
+    .groups   = "drop"
+  )
 
-cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
+# ================================================================
+# MEANS-ONLY INTERACTION PLOTS
+# ================================================================
 
-# 1. Normality of residuals (sample if too large)
-if (nrow(all_df_gamma) > 5000) {
-  shapiro_test <- shapiro.test(sample(residuals(model), 5000))
-  cat("Shapiro-Wilk test for normality (n=5000 sample): W =", 
-      round(shapiro_test$statistic, 4), 
-      ", p =", format.pval(shapiro_test$p.value), "\n")
-} else {
-  shapiro_test <- shapiro.test(residuals(model))
-  cat("Shapiro-Wilk test for normality: W =", 
-      round(shapiro_test$statistic, 4), 
-      ", p =", format.pval(shapiro_test$p.value), "\n")
-}
+# ---- Means-only: faceted by treatment ----
 
-# 2. Homogeneity of variance (Levene's test)
-levene_test <- car::leveneTest(bias ~ treatment * n * prop_extreme * magnitude_level, 
-                               data = all_df_gamma)
-cat("Levene's test for homogeneity: F =", round(levene_test$`F value`[1], 4),
-    ", p =", format.pval(levene_test$`Pr(>F)`[1]), "\n")
+plot_means_trt_nobs_facet <- means_trt_nobs |>
+  ggplot(aes(x = nobs_fct, y = mean_bias, group = 1)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  geom_errorbar(
+    aes(ymin = mean_bias - 1.96*se_bias,
+        ymax = mean_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6, color = "steelblue"
+  ) +
+  geom_point(size = 3.5, shape = 18, color = "steelblue") +
+  facet_wrap(~ treatment_fct, nrow = 1,
+             labeller = labeller(treatment_fct = label_wrap_gen(width = 15))) +
+  labs(
+    title    = "Gamma Interaction Bias: Treatment × Sample Size",
+    subtitle = expression(paste(
+      "Type III F(8) = 3.50, p < .001, ", eta[p]^2,
+      " = .0004 (negligible). Means ± 95% CI.")),
+    x = "Sample size (N obs)",
+    y = "Mean bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# 3. Diagnostic plots
-png(paste0("figures/anova_diagnostics_", dt, ".png"), 
-    width = 10, height = 8, units = "in", res = 300)
-par(mfrow = c(2, 2))
-plot(model)
-dev.off()
+plot_means_trt_prop_facet <- means_trt_prop |>
+  ggplot(aes(x = prop_extreme_fct, y = mean_bias, group = 1)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  geom_errorbar(
+    aes(ymin = mean_bias - 1.96*se_bias,
+        ymax = mean_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6, color = "steelblue"
+  ) +
+  geom_point(size = 3.5, shape = 18, color = "steelblue") +
+  facet_wrap(~ treatment_fct, nrow = 1,
+             labeller = labeller(treatment_fct = label_wrap_gen(width = 15))) +
+  labs(
+    title    = "Gamma Interaction Bias: Treatment × Proportion Extreme",
+    subtitle = expression(paste(
+      "Type III F(8) = 22.52, p < .001, ", eta[p]^2,
+      " = .0027 (negligible). Means ± 95% CI.")),
+    x = "Proportion of extreme values",
+    y = "Mean bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
+plot_means_trt_nobs_facet
+plot_means_trt_prop_facet
+
+ggsave(here::here(paste0("figures/anova_means_trt_nobs_facet_", dt, ".png")),
+       plot_means_trt_nobs_facet, width = 13, height = 5, dpi = 300)
+ggsave(here::here(paste0("figures/anova_means_trt_prop_facet_", dt, ".png")),
+       plot_means_trt_prop_facet, width = 13, height = 5, dpi = 300)
+```  
 
 
+
+```{r bias_es}
 # Plot partial eta² for significant effects
 # plot pes ===================================================
 # Step 9: Visualize Effect Sizes (CORRECTED)
