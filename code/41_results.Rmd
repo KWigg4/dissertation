@@ -245,6 +245,7 @@ tbl_bias_overall <- all_df_gamma %>%
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
     sd_bias          = sd(bias, na.rm = TRUE),
+    var_bias         = var(bias, na.rm=TRUE),
     median_bias      = median(bias, na.rm = TRUE),
     mad_bias         = mad(bias, na.rm = TRUE),
     min_bias         = min(bias, na.rm = TRUE),
@@ -259,6 +260,8 @@ tbl_bias_overall <- all_df_gamma %>%
   )
 
 print(tbl_bias_overall)
+write.csv(tbl_bias_overall, 
+          here::here("results/tbl_bias_overall_2026-02-22.csv"))
 
 tbl_bias_treatment <- all_df_gamma %>%
   dplyr::group_by(treatment_fct) %>%
@@ -279,13 +282,15 @@ tbl_bias_treatment <- all_df_gamma %>%
     .groups = "drop"
   )
 print(tbl_bias_treatment)
+write.csv(tbl_bias_treatment, 
+          here::here("results/tbl_bias_treatment_2026-02-22.csv"))
 
 gt_bias_treatment <- tbl_bias_treatment %>%
   dplyr::mutate(
     dplyr::across(
       c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, 
         q3_bias, iqr_bias, max_bias, mean_abs_bias),
-      ~ scales::number(.x, accuracy = 0.0001)
+      ~ scales::number(.x, accuracy = 0.01)
     ),
     share_bias_neg = scales::percent(share_bias_neg, accuracy = 0.1),
     share_bias_pos = scales::percent(share_bias_pos, accuracy = 0.1)
@@ -313,6 +318,8 @@ gt_bias_treatment <- tbl_bias_treatment %>%
   gt::tab_options(data_row.padding = gt::px(1))
 
 gtsave(gt_bias_treatment, here::here("results/tbl_bias_treatment.rtf"))
+
+tbl_bias_summ <- 
 
 ```  
 
@@ -342,6 +349,7 @@ tbl_bias_UnderOver_scen <- all_df_gamma %>%
     over_majority  = over_rate > 0.5
   )
 
+# Not including, per meeting with Tsai 
 tbl_bias_UnderOver_scen |> 
   arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) |> 
   select(-c(under_rate, over_rate)) |> 
@@ -397,6 +405,7 @@ scenario_summary <- tbl_bias_UnderOver_scen |>
     .groups = "drop"
   )
 
+# Not using per Tsai
 scenario_summary |>
   gt() |>
   gtsave(
@@ -427,7 +436,7 @@ prep_plot_bias_over_under <- summ_gamma |>
   )
 
 x_min <- min(prep_plot_bias_over_under$bias, na.rm = TRUE) # -0.024372
-x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.10535
+x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.095811
 
 # table 
 tab_27 <- prep_plot_bias_over_under |>
@@ -455,6 +464,7 @@ tab_27 |>
   ) |> 
   gt() |> 
   gtsave(here::here("results/tab_27.rtf"))
+
 
 plots_bias <- prep_plot_bias_over_under |> 
   group_split(treatment_fct) |> 
@@ -494,12 +504,136 @@ plots_bias <- prep_plot_bias_over_under |>
 
 plots_bias[[1]]
 plots_bias
+```  
+
+```{r scenario_lolli_2}
+plot_bias_facet <- prep_plot_bias_over_under |>
+  ggplot(aes(x = bias, y = scenario)) +
+  geom_segment(
+    aes(x = 0, xend = bias, y = scenario, yend = scenario),
+    linewidth = 0.5, color = "grey60"
+  ) +
+  geom_point(
+    aes(color = abs(bias) > 0.04),
+    size = 1.8
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
+  scale_color_manual(
+    values = c(`TRUE` = "red", `FALSE` = "steelblue"),
+    labels = c("≤ 0.04", "> 0.04"),
+    name   = "|Bias|"
+  ) +
+  scale_x_continuous(limits = c(x_min, x_max)) +
+  facet_wrap(~ treatment_fct, nrow = 1) +
+  labs(
+    title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
+    subtitle = "Red points indicate |bias| > 0.04",
+    x        = "Bias",
+    y        = "Scenario"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.major.y  = element_blank(),
+    panel.grid.minor    = element_blank(),
+    axis.text.y         = element_text(size = 7),
+    strip.text          = element_text(face = "bold", size = 9),
+    legend.position     = "bottom",
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
+  )
+
+plot_bias_facet
+
+ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet_", dt, ".png")),
+       plot_bias_facet, width = 16, height = 8, dpi = 300)
 ```
 
 
-```{r plots_dir}
+```{r lolli3}
+# --- Step 0: rebuild scenario_short as single-line FIRST ---
+prep_plot_bias_over_under <- prep_plot_bias_over_under |>
+  mutate(
+    scenario_short = glue::glue("p={prop_extreme} n={nobs} m={magnitude_level}")
+  )
 
-prep_plot_bias_lollipop2 <- summ_gamma %>%
+# --- Step 1: order scenarios by frequency of |bias| > 0.02 across all treatments ---
+scenario_order <- prep_plot_bias_over_under |>
+  group_by(scenario_short) |>
+  summarise(n_large_bias = sum(abs(bias) > 0.02, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_bias)) |>
+  pull(scenario_short)
+
+# --- Step 2: order treatments by frequency of |bias| > 0.04 (worst to best) ---
+treatment_order <- prep_plot_bias_over_under |>
+  group_by(treatment_fct) |>
+  summarise(n_large_bias = sum(abs(bias) > 0.04, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_large_bias)) |>
+  pull(treatment_fct)
+
+# --- Step 3: apply ordering and bias tiers ---
+prep_plot_bias_ordered <- prep_plot_bias_over_under |>
+  mutate(
+    scenario_short = factor(scenario_short, levels = scenario_order),
+    treatment_fct  = factor(treatment_fct,  levels = treatment_order),
+    bias_tier = case_when(
+      abs(bias) > 0.05 ~ ">|0.05|",
+      abs(bias) > 0.04 ~ ">|0.04|",
+      TRUE             ~ "≤|0.04|"
+    ),
+    bias_tier = factor(bias_tier, levels = c("≤|0.04|", ">|0.04|", ">|0.05|"))
+  )
+
+# --- Step 4: plot ---
+plot_bias_facet4 <- prep_plot_bias_ordered |>
+  ggplot(aes(x = scenario_short, y = bias)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
+  geom_segment(
+    aes(x = scenario_short, xend = scenario_short, y = 0, yend = bias),
+    linewidth = 0.5, color = "grey60"
+  ) +
+  geom_point(
+    aes(color = bias_tier),
+    size = 2
+  ) +
+  scale_color_manual(
+    name   = "|Bias| threshold",
+    values = c(
+      "≤|0.04|" = "steelblue",
+      ">|0.04|" = "orange",
+      ">|0.05|" = "red"
+    )
+  ) +
+  scale_y_continuous(limits = c(x_min, x_max)) +
+  facet_wrap(
+    ~ treatment_fct, nrow = 2,
+    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+  ) +
+  labs(
+    title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
+    subtitle = "Scenarios ordered by frequency of |bias| > 0.02; treatments ordered worst to best (left to right, top to bottom)",
+    x        = NULL,
+    y        = "Bias"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor    = element_blank(),
+    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
+    strip.text          = element_text(face = "bold", size = 9),
+    legend.position     = "bottom",
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
+  )
+
+plot_bias_facet4
+
+ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet4_", dt, ".png")),
+       plot_bias_facet4, width = 14, height = 9, dpi = 300)
+```
+
+```{r plots_dir}
+# did from all_df_gamma and summ_gamma and got exact same plot
+prep_plot_bias_lollipop <- all_df_gamma %>%
   group_by(treatment_fct) %>%
   summarise(
     mean_of_means = mean(bias, na.rm = TRUE),
@@ -509,7 +643,7 @@ prep_plot_bias_lollipop2 <- summ_gamma %>%
   mutate(
     sign = ifelse(
       mean_of_means < 0, "Underestimation (−)", "Overestimation (+)")) 
-  
+
 plot_bias_lollipop <- prep_plot_bias_lollipop |> 
   ggplot(aes(x = treatment_fct, y = mean_of_means, color = sign)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
@@ -579,6 +713,8 @@ plot_trends <- ggplot(
 plot_trends
 ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
        plot_trends, width = 11, height = 7, dpi = 300)
+
+
 ```
 
 ## RQ2: Empirical SE  
