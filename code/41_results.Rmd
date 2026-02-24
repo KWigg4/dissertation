@@ -725,12 +725,14 @@ compute_ESE_metrics <- function(df) {
       se_model_median = median(se, na.rm = TRUE),
 
       # --- Morris (2019) calibration metrics ---
-      ratio_modse_emp  = se_model_mean / ese,               # <1 = underest; >1 = overest
-      rel_error_modse  = 100 * (se_model_mean / ese - 1),   # % error; negative = underest
+      ratio_modse_emp  = se_model_mean / ese,   # <1 = underest; >1 = overest
+      rel_error_modse  = 100 * (se_model_mean / ese - 1),   
+        # % error; negative = underest
       rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
 
       # --- Replicate-level SE calibration flag ---
-      prop_under_se     = mean(se < ese, na.rm = TRUE),     # proportion of reps where ModSE < ESE
+      prop_under_se     = mean(se < ese, na.rm = TRUE),    
+        # proportion of reps where ModSE < ESE
       under_majority_se = prop_under_se > 0.5,
 
       # --- Descriptives of the ESTIMATE distribution (not ESE) ---
@@ -762,6 +764,12 @@ ese_by_treatment <- ese_results |>
     mad_ese    = mad(ese),
     min_ese    = min(ese),
     max_ese    = max(ese),
+    
+     # RMSE of model SE (avgd across 27 scenarios)
+    mean_rmse_se = mean(rmse_se, na.rm = TRUE),
+    sd_rmse_se   = sd(rmse_se, na.rm = TRUE),
+    min_rmse_se  = min(rmse_se, na.rm = TRUE),
+    max_rmse_se  = max(rmse_se, na.rm = TRUE),
 
     # --- Morris calibration metrics across 27 scenarios ---
     
@@ -910,9 +918,10 @@ tab_cov_treatment <- summ_gamma |>
     prop_below_95 = mean(coverage < 0.95),
     .groups = "drop"
   )
+
 write.csv(
   tab_cov_treatment,
-  here::here("results/tab_cov_treatment_2026-02-23.csv")
+  here::here("results/tab_cov_treatment_2026-02-24.csv")
 )
 
 # coverage by scenarios (N=135)
@@ -946,116 +955,91 @@ tab_cov_passfail <- summ_gamma |>
     .groups = "drop"
   )
 
-# reshape to long format for plotting
-df_long <- tab_cov_passfail |> 
-  select(treatment_fct, prop_pass, prop_fail) |> 
-  pivot_longer( 
-    cols = c(prop_pass, prop_fail), 
-    names_to = "status", values_to = "prop" ) |> 
-  mutate( status = factor( 
-    status, 
-    levels = c("prop_pass", "prop_fail"), 
-    labels = c("Pass (≥95%)", "Fail (<95%)") ), 
-    label = scales::percent(prop, accuracy = 1) )
-
-df_plot <- ggplot(
-  df_long, 
-  aes(x = treatment_fct, y = prop, fill = status)) + 
-  geom_col(width = 0.7, color = "white") + 
-  geom_text( aes(label = label), 
-             position = position_stack(vjust = 0.5), 
-             color = "white", size = 4.2 ) + 
-  scale_fill_manual(
-    values = c("Pass (≥95%)" = "steelblue", "Fail (<95%)" = "firebrick")) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) + 
-  labs( title = "Coverage Performance by Treatment", 
-        subtitle = "Percent of scenarios meeting nominal 95% coverage", 
-        x = "Treatment", 
-        y = "Proportion of Scenarios", 
-        fill = "Coverage Status" ) + 
-  theme_minimal(base_size = 13) + 
-  theme( axis.text.x = element_text(angle = 25, hjust = 1), 
-         plot.title = element_text(face = "bold") )
-
-# Dot plot for means by scenario: 
-
-cov_mean_plot <- tab_cov_scenario |>
+# --- Step 0: build scenario_short ---
+prep_plot_cov <- summ_gamma |>
   mutate(
-    status = ifelse(mean_cov >= 0.95, "≥95%", "<95%"),
-    status = factor(status, levels = c("<95%", "≥95%"))
+    scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
   )
 
-ggplot(cov_mean_plot, 
-       aes(x = magnitude_fct, y = mean_cov, color = status)) +
-  geom_point(size = 3) +
-  scale_color_manual(values = c("<95%" = "firebrick", "≥95%" = "steelblue")) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  facet_grid(nobs_fct ~ prop_extreme_fct) +
-  labs(
-    title = "Mean Coverage Across Scenarios",
-    x = "Magnitude",
-    y = "Mean Coverage",
-    color = "Coverage Status"
+# --- Step 1: order scenarios by coverage (worst to best) ---
+scenario_order_cov <- prep_plot_cov |>
+  group_by(scenario_short) |>
+  summarise(mean_cov = mean(coverage, na.rm = TRUE), .groups = "drop") |>
+  arrange(mean_cov) |>
+  pull(scenario_short)
+
+# --- Step 2: order treatments by frequency of coverage < 0.95 (worst to best) ---
+treatment_order_cov <- prep_plot_cov |>
+  group_by(treatment_fct) |>
+  summarise(n_below = sum(coverage < 0.95, na.rm = TRUE), .groups = "drop") |>
+  arrange(desc(n_below)) |>
+  pull(treatment_fct)
+
+# --- Step 3: apply ordering and coverage flag ---
+prep_plot_cov_ordered <- prep_plot_cov |>
+  mutate(
+    scenario_short = factor(scenario_short, levels = scenario_order_cov),
+    treatment_fct  = factor(treatment_fct,  levels = treatment_order_cov),
+    cov_flag       = ifelse(coverage < 0.95, "Below 95%", "At/Above 95%"),
+    cov_flag       = factor(cov_flag, levels = c("At/Above 95%", "Below 95%"))
+  )
+
+# --- Step 4: plot ---
+plot_cov_facet <- prep_plot_cov_ordered |>
+  ggplot(aes(x = scenario_short, y = coverage)) +
+  geom_hline(
+    yintercept = 0.95, linetype = "dashed",
+    color = "grey30", linewidth = 0.5
   ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title = element_text(face = "bold"),
-    strip.text = element_text(face = "bold")
-  )
-
-cov_plot_scen_prep <- cov_mean_plot |> 
-  select(
-    nobs_fct, prop_extreme_fct, magnitude_fct, p_cov_below_95, p_cov_ge_95
-  ) |> 
-  pivot_longer(
-    cols = c(p_cov_ge_95, p_cov_below_95), 
-    names_to = "status", values_to = "prop"
-  ) |> 
-  mutate(
-    status = factor(
-      status,
-      levels = c("p_cov_below_95", "p_cov_ge_95"),
-      labels = c("Fail (<95%)", "Pass (>=95%)")
-    ),
-    label = scales::percent(prop, accuracy = 1)
-  )
-
-cov_plot_scen_prep <- cov_plot_scen_prep |>
-  mutate(
-    status = forcats::fct_relevel(
-      status,"Pass (>=95%)", "Fail (<95%)")
-  )
-
-ggplot(
-  cov_plot_scen_prep, aes(x = magnitude_fct, y = prop, fill = status)
-) +
-  geom_col(width = 0.7, color = "white") +
-  geom_text(
-    aes(label = ifelse(prop == 0, "", label)),
-    position = position_stack(vjust = 0.5),
-    color = "white",
-    size = 2.8
+  geom_segment(
+    aes(x = scenario_short, xend = scenario_short,
+        y = 0.95, yend = coverage, color = cov_flag),
+    linewidth = 0.5
   ) +
-  scale_fill_manual(
-    values = setNames(
-      c("steelblue", "firebrick"),
-      levels(cov_plot_scen_prep$status)
+  geom_point(
+    aes(color = cov_flag),
+    size = 2
+  ) +
+  scale_color_manual(
+    name   = "Coverage status",
+    values = c(
+      "At/Above 95%" = "#2ca02c",   # green
+      "Below 95%"    = "#d62728"    # red
     )
   ) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  facet_grid(nobs_fct ~ prop_extreme_fct) +
-  labs(
-    title = "Proportion of Scenarios Meeting Nominal 95% Coverage",
-    x = "Magnitude",
-    y = "Proportion of Scenarios",
-    fill = "Coverage Status"
+  scale_y_continuous(
+    limits = c(
+      min(0.85, min(prep_plot_cov_ordered$coverage, na.rm = TRUE) - 0.01),
+      1.0
+    ),
+    labels = scales::percent_format(accuracy = 1),
+    breaks = seq(0.85, 1.0, by = 0.05)
   ) +
-  theme_minimal(base_size = 11) +
+  facet_wrap(
+    ~ treatment_fct, nrow = 2,
+    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+  ) +
+  labs(
+    title    = "Gamma Interaction: Confidence Interval Coverage by Treatment and Scenario",
+    subtitle = "Dashed line = nominal 95%; scenarios ordered worst to best within each panel; treatments ordered worst to best left to right",
+    x        = NULL,
+    y        = "Coverage"
+  ) +
+  theme_minimal(base_size = 10) +
   theme(
-    plot.title = element_text(face = "bold"),
-    strip.text = element_text(face = "bold"),
-    axis.text.x = element_text(angle = 25, hjust = 1)
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor    = element_blank(),
+    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
+    strip.text          = element_text(face = "bold", size = 9),
+    legend.position     = "bottom",
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
   )
+
+plot_cov_facet
+ggsave(here::here(paste0("figures/gamma_coverage_lollipop_facet_", dt, ".png")),
+       plot_cov_facet, width = 16, height = 8, dpi = 300)
+
 
 ```
 
@@ -1064,59 +1048,75 @@ ggplot(
 
 2C. Coverage heatmap vs nominal 0.95  
 ```{r plot_cov_heat}
-plot_cov_heat <- summ_gamma %>%
+# get actual range to set tight limits
+cov_min <- floor(min(summ_gamma$coverage, na.rm = TRUE) * 100) / 100
+cov_max <- ceiling(max(summ_gamma$coverage, na.rm = TRUE) * 100) / 100
+
+plot_cov_heat2 <- summ_gamma %>%
   dplyr::mutate(
-    treatment = forcats::fct_relevel(
-      treatment, "raw","topcode","mean_adj","median_adj","truncate"),
-    cell = paste0("prop=", prop_extreme, ", mag=", magnitude_level, ", n=", n)
+    treatment_fct = forcats::fct_relevel(
+      treatment_fct,
+      "No treatment", "Top-coding",
+      "Mean-preserved top-coding",
+      "Median-preserved top-coding",
+      "Truncation"
+    ),
+    cell = glue::glue("p={prop_extreme_fct}  mag={magnitude_fct}  n={nobs_fct}"),
+    # label: percent format, flag below-95 with asterisk
+    cov_label = paste0(
+      scales::number(coverage * 100, accuracy = 0.1), "%",
+      ifelse(coverage < 0.95, "*", "")
+    )
   ) %>%
-  ggplot(aes(x = treatment, y = cell, fill = coverage)) +
-  geom_tile(color = "white") +
+  ggplot(aes(x = treatment_fct, y = cell, fill = coverage)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(
+    aes(
+      label = cov_label,
+      color = ifelse(coverage < 0.92 | coverage > 0.98, "light", "dark")
+    ),
+    size = 2.8
+  ) +
+  scale_color_manual(
+    values = c("light" = "grey20", "dark" = "grey20"),
+    guide  = "none"
+  ) +
   scale_fill_gradient2(
-    low = "#C7372F", mid = "white", high = "#2B6CB0",
-    midpoint = 0.95, limits = c(0, 1), labels = scales::percent
+    low      = "#C7372F",
+    mid      = "white",
+    high     = "#2ca02c",
+    midpoint = 0.95,
+    limits   = c(cov_min, cov_max),   # tight limits = full color range used
+    labels   = scales::percent_format(accuracy = 1)
   ) +
+  scale_x_discrete(labels = label_wrap_gen(width = 12)) +
   labs(
-    title = "Gamma Interaction: Coverage by Treatment and Scenario",
-    subtitle = "Blue ≥ nominal 95%; red shows undercoverage; y-label encodes prop, mag, and n",
-    x = "Treatment", y = "Scenario (prop, mag, n)", fill = "Coverage"
+    title    = "Gamma Interaction: Coverage by Treatment and Scenario",
+    subtitle = "Green ≥ 95% (nominal); red = undercoverage; * = below 95%; values are coverage rates",
+    x        = NULL,
+    y        = "Scenario",
+    fill     = "Coverage"
   ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x         = element_text(angle = 30, hjust = 1, size = 9),
+    axis.text.y         = element_text(size = 8),
+    panel.grid          = element_blank(),
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    legend.position     = "right"
+  )
 
-plot_cov_heat
-ggsave(here::here(paste0("figures/gamma_coverage_heat_", dt, ".png")),
-       plot_cov_heat, width = 11, height = 8, dpi = 300)
-```    
+plot_cov_heat2
+ggsave(here::here(paste0("figures/gamma_coverage_heat2_", dt, ".png")),
+       plot_cov_heat2, width = 13, height = 10, dpi = 300)
+```   
 
 
-2D. Consistency bars: % of scenarios with majority underestimation  
-```{r fig_underest}
-
-plot_under_consistency <- scenario_stats %>%
-  group_by(treatment) %>%
-  summarise(share_under_majority = mean(under_majority, na.rm = TRUE), .groups = "drop") %>%
-  mutate(treatment = forcats::fct_relevel(treatment, "raw","topcode","mean_adj","median_adj","truncate")) %>%
-  ggplot(aes(treatment, share_under_majority)) +
-  geom_col(fill = "#C7372F") +
-  geom_text(aes(label = scales::percent(share_under_majority, accuracy = 0.1)),
-            vjust = -0.3) +
-  scale_y_continuous(labels = scales::percent_format()) +
-  labs(
-    title = "Gamma Interaction: Consistency of Underestimation by Treatment",
-    subtitle = "% of scenarios where >50% of reps underestimated",
-    x = NULL, y = "% scenarios"
-  ) +
-  theme_minimal()
-
-plot_under_consistency
-ggsave(here::here(paste0("figures/gamma_under_consistency_", dt, ".png")),
-       plot_under_consistency, width = 8, height = 5, dpi = 300)
-```  
 
 3. Auto-generate sentences  
 Summarize direction, magnitude, reliability per treatment using tables above  
-```{r sentences}
+```{r sentences, eval=FALSE}
 sentences <- tab_consistency %>%
   mutate(
     dir = ifelse(as.numeric(avg_mean_bias) < 0, "underestimated", "overestimated"),
