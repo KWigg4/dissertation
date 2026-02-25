@@ -707,6 +707,48 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 
 ## RQ2: Empirical SE  
 
+```{r}
+compute_ESE_metrics <- function(
+    group_vars = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")) {
+  
+  # ---- Stage 1: Rep-level → scenario-level summary ----
+  stage1 <- all_df_gamma |>
+    group_by(across(all_of(group_vars))) |>
+    summarise(
+      n_reps           = n(),
+      # Core ESE
+      ese              = sd(est, na.rm = TRUE),
+      mcse_ese         = sd(est, na.rm = TRUE) / sqrt(n()),
+      # Model SE summaries
+      se_model_mean    = mean(se, na.rm = TRUE),
+      se_model_median  = median(se, na.rm = TRUE),
+      # Morris (2019) calibration
+      ratio_modse_emp  = se_model_mean / ese,
+      rel_error_modse  = 100 * (se_model_mean / ese - 1),
+      rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
+      # Rep-level SE calibration flag
+      prop_under_se    = mean(se < ese, na.rm = TRUE),
+      under_majority_se = prop_under_se > 0.5,
+      # Estimate distribution descriptives
+      est_mean         = mean(est, na.rm = TRUE),
+      est_median       = median(est, na.rm = TRUE),
+      est_sd           = sd(est, na.rm = TRUE),
+      est_mad          = mad(est, na.rm = TRUE),
+      est_min          = min(est, na.rm = TRUE),
+      est_max          = max(est, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  stage1
+}
+
+ese_overall <- compute_ESE_metrics(group_vars = character(0))
+ese_by_treatment <- compute_ESE_metrics(
+  group_vars = "treatment_fct")
+
+ese_by_scenario  <- compute_ESE_metrics(
+  group_vars = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct"))
+```
 
 
 
