@@ -708,46 +708,89 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 ## RQ2: Empirical SE  
 
 ```{r}
+# ============================================================
+# compute_ESE_metrics: flexible grouping, always from all_df_gamma
+# ============================================================
 compute_ESE_metrics <- function(
-    group_vars = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")) {
-  
-  # ---- Stage 1: Rep-level → scenario-level summary ----
-  stage1 <- all_df_gamma |>
+    group_vars = c(
+      "treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")) {
+  all_df_gamma |>
     group_by(across(all_of(group_vars))) |>
     summarise(
-      n_reps           = n(),
+      n_reps            = n(),
       # Core ESE
-      ese              = sd(est, na.rm = TRUE),
-      mcse_ese         = sd(est, na.rm = TRUE) / sqrt(n()),
+      ese               = sd(est, na.rm = TRUE),
+      mcse_ese          = sd(est, na.rm = TRUE) / sqrt(n()),
       # Model SE summaries
-      se_model_mean    = mean(se, na.rm = TRUE),
-      se_model_median  = median(se, na.rm = TRUE),
+      se_model_mean     = mean(se, na.rm = TRUE),
+      se_model_median   = median(se, na.rm = TRUE),
       # Morris (2019) calibration
-      ratio_modse_emp  = se_model_mean / ese,
-      rel_error_modse  = 100 * (se_model_mean / ese - 1),
-      rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
+      ratio_modse_emp   = se_model_mean / ese,
+      rel_error_modse   = 100 * (se_model_mean / ese - 1),
+      rmse_se           = sqrt(mean((se - ese)^2, na.rm = TRUE)),
       # Rep-level SE calibration flag
-      prop_under_se    = mean(se < ese, na.rm = TRUE),
+      prop_under_se     = mean(se < ese, na.rm = TRUE),
       under_majority_se = prop_under_se > 0.5,
-      # Estimate distribution descriptives
-      est_mean         = mean(est, na.rm = TRUE),
-      est_median       = median(est, na.rm = TRUE),
-      est_sd           = sd(est, na.rm = TRUE),
-      est_mad          = mad(est, na.rm = TRUE),
-      est_min          = min(est, na.rm = TRUE),
-      est_max          = max(est, na.rm = TRUE),
+      # RMSE of estimator
+      rmse              = sqrt(mean((est - true)^2, na.rm = TRUE)),
       .groups = "drop"
     )
-  
-  stage1
 }
 
-ese_overall <- compute_ESE_metrics(group_vars = character(0))
-ese_by_treatment <- compute_ESE_metrics(
-  group_vars = "treatment_fct")
+# ============================================================
+# Three direct calls on all_df_gamma
+# ============================================================
 
-ese_by_scenario  <- compute_ESE_metrics(
-  group_vars = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct"))
+# 1 row: overall
+ese_overall      <- compute_ESE_metrics(group_vars = character(0))
+
+# 5 rows: one ESE per treatment, computed from ~13,500 reps each
+ese_by_treatment <- compute_ESE_metrics(group_vars = "treatment_fct")
+
+# 135 rows: one ESE per treatment*scenario cell, computed from ~500 reps each
+ese_full         <- compute_ESE_metrics(
+  group_vars = c("treatment_fct", "nobs_fct","prop_extreme_fct", "magnitude_fct"))
+
+# ============================================================
+# Descriptives of the 27 scenario-level ESEs per treatment
+# Requires ese_full because you need 27 ESE values per treatment to summarise
+# This is a SEPARATE question from ese_by_treatment above
+# ============================================================
+ese_by_treatment_scen_descr <- ese_full |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_scen                   = n(),
+    # ESE descriptives across 27 scenarios
+    mean_ese                 = mean(ese, na.rm = TRUE),
+    sd_ese                   = sd(ese, na.rm = TRUE),
+    median_ese               = median(ese, na.rm = TRUE),
+    mad_ese                  = mad(ese, na.rm = TRUE),
+    min_ese                  = min(ese, na.rm = TRUE),
+    max_ese                  = max(ese, na.rm = TRUE),
+    # Morris calibration descriptives across 27 scenarios
+    mean_ratio_modse_emp     = mean(ratio_modse_emp, na.rm = TRUE),
+    mean_rel_error_modse     = mean(rel_error_modse, na.rm = TRUE),
+    sd_rel_error_modse       = sd(rel_error_modse, na.rm = TRUE),
+    mean_rmse_se             = mean(rmse_se, na.rm = TRUE),
+    # Scenario-level underestimation counts
+    n_scen_underest          = sum(ratio_modse_emp < 1, na.rm = TRUE),
+    prop_scen_underest       = mean(ratio_modse_emp < 1, na.rm = TRUE),
+    n_scen_under_majority    = sum(under_majority_se, na.rm = TRUE),
+    prop_scen_under_majority = mean(under_majority_se, na.rm = TRUE),
+    # RMSE descriptives
+    mean_rmse                = mean(rmse, na.rm = TRUE),
+    sd_rmse                  = sd(rmse, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ============================================================
+# Save all
+# ============================================================
+fn_save_results(ese_overall)
+fn_save_results(ese_by_treatment)
+fn_save_results(ese_full)
+fn_save_results(ese_by_treatment_scen_descr)
+
 ```
 
 
@@ -771,12 +814,12 @@ compute_ESE_metrics <- function(df, group_vars = c("treatment_fct","nobs_fct","p
       # --- Morris (2019) calibration metrics ---
       ratio_modse_emp  = se_model_mean / ese,   # <1 = underest; >1 = overest
       rel_error_modse  = 100 * (se_model_mean / ese - 1),   
-        # % error; negative = underest
+       
       rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
 
       # --- Replicate-level SE calibration flag ---
       prop_under_se     = mean(se < ese, na.rm = TRUE),    
-        # proportion of reps where ModSE < ESE
+        
       under_majority_se = prop_under_se > 0.5,
 
       # --- Descriptives of the ESTIMATE distribution (not ESE) ---
@@ -932,6 +975,74 @@ ggsave(here::here(paste0("figures/gamma_ese_lollipop_facet_", dt, ".png")),
 ```  
 
 
+```{r}
+# ── Overall (N = 67,371 rows)
+tab_cov_overall <- all_df_gamma |>
+  summarise(
+    n_reps        = n(),
+    mean_cov      = mean(cover_ind, na.rm = TRUE),
+    sd_cov        = sd(cover_ind, na.rm = TRUE),
+    median_cov    = median(cover_ind, na.rm = TRUE),
+    min_cov       = min(cover_ind, na.rm = TRUE),
+    max_cov       = max(cover_ind, na.rm = TRUE),
+    n_covered     = sum(cover_ind == 1, na.rm = TRUE),
+    n_not_covered = sum(cover_ind == 0, na.rm = TRUE)
+  )
+
+# ── By treatment only
+tab_cov_treatment <- all_df_gamma |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_reps        = n(),
+    mean_cov      = mean(cover_ind, na.rm = TRUE),
+    sd_cov        = sd(cover_ind, na.rm = TRUE),
+    median_cov    = median(cover_ind, na.rm = TRUE),
+    min_cov       = min(cover_ind, na.rm = TRUE),
+    max_cov       = max(cover_ind, na.rm = TRUE),
+    n_covered     = sum(cover_ind == 1, na.rm = TRUE),
+    n_not_covered = sum(cover_ind == 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ── Scenario-level: collapse to one rate per scenario first 
+# Step 1: one coverage rate per scenario (proportion of 500 reps covered)
+cov_by_scenario <- all_df_gamma |>
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  summarise(
+    n_reps    = n(),
+    coverage  = mean(cover_ind, na.rm = TRUE),   # proportion covered in this scenario
+    .groups = "drop"
+  )
+# N = 135 rows (5 treatments × 27 scenarios)
+
+# Step 2: descriptives across those 135 scenario-level rates
+tab_cov_scenario <- cov_by_scenario |>
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  summarise(
+    n_reps       = first(n_reps),
+    coverage     = first(coverage),
+    meets_95     = coverage >= 0.95,
+    .groups = "drop"
+  )
+# (This is just cov_by_scenario with a flag added; use it directly for heatmaps etc.)
+
+# Step 3: treatment-level summary ACROSS the 27 scenarios per treatment
+tab_cov_passfail <- cov_by_scenario |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_scenarios   = n(),                          # should be 27
+    mean_cov      = mean(coverage),
+    sd_cov        = sd(coverage),
+    median_cov    = median(coverage),
+    min_cov       = min(coverage),
+    max_cov       = max(coverage),
+    n_pass        = sum(coverage >= 0.95),
+    n_fail        = sum(coverage < 0.95),
+    prop_pass     = mean(coverage >= 0.95),
+    prop_fail     = mean(coverage < 0.95),
+    .groups = "drop"
+  )
+```
 
 
 
@@ -946,8 +1057,9 @@ cov_grid <- all_df_gamma %>%
 fn_save_results(cov_grid)
 
 # 5 treatments
-tab_cov_treatment <- summ_gamma |>
+tab_cov_treatment <- all_df_gamma |>
   group_by(treatment_fct) |>
+  mutate(coverage=mean(cover_ind)) |> 
   summarise(
     scenarios = dplyr::n(),
     mean_cov = mean(coverage, na.rm = TRUE),
@@ -970,8 +1082,9 @@ write.csv(
 )
 
 # coverage by scenarios (N=135)
-tab_cov_scenario <- summ_gamma |>
+tab_cov_scenario <- all_df_gamma |>
   group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  mutate(coverage=mean(cover_ind)) |> 
   summarise(
     scenarios = dplyr::n(),
     mean_cov = mean(coverage),
@@ -989,7 +1102,7 @@ write.csv(
 )
 
 # Pass/fail table
-tab_cov_passfail <- summ_gamma |>
+tab_cov_passfail <- tab_cov_scenario |>
   group_by(treatment_fct) |>
   summarise(
     scenarios = dplyr::n(),
