@@ -975,79 +975,30 @@ ggsave(here::here(paste0("figures/gamma_ese_lollipop_facet_", dt, ".png")),
 ```  
 
 
-```{r}
-# ── Overall (N = 67,371 rows)
+```{r cov_tables}
+# Overall (N = 67,371 reps)
 tab_cov_overall <- all_df_gamma |>
   summarise(
-    n_reps        = n(),
-    mean_cov      = mean(cover_ind, na.rm = TRUE),
-    sd_cov        = sd(cover_ind, na.rm = TRUE),
-    median_cov    = median(cover_ind, na.rm = TRUE),
-    min_cov       = min(cover_ind, na.rm = TRUE),
-    max_cov       = max(cover_ind, na.rm = TRUE),
-    n_covered     = sum(cover_ind == 1, na.rm = TRUE),
-    n_not_covered = sum(cover_ind == 0, na.rm = TRUE)
+    n_reps      = n(),
+    mean_cov    = mean(cover_ind, na.rm = TRUE),
+    n_covered   = sum(cover_ind == 1, na.rm = TRUE),
+    n_uncovered = sum(cover_ind == 0, na.rm = TRUE)
   )
 
-# ── By treatment only
-tab_cov_treatment <- all_df_gamma |>
+# By treatment, rep-level (N ~13,500 per treatment)
+# This tells you: of all reps under this treatment, what fraction covered?
+tab_cov_by_treatment_reps <- all_df_gamma |>
   group_by(treatment_fct) |>
   summarise(
-    n_reps        = n(),
-    mean_cov      = mean(cover_ind, na.rm = TRUE),
-    sd_cov        = sd(cover_ind, na.rm = TRUE),
-    median_cov    = median(cover_ind, na.rm = TRUE),
-    min_cov       = min(cover_ind, na.rm = TRUE),
-    max_cov       = max(cover_ind, na.rm = TRUE),
-    n_covered     = sum(cover_ind == 1, na.rm = TRUE),
-    n_not_covered = sum(cover_ind == 0, na.rm = TRUE),
+    n_reps      = n(),
+    mean_cov    = mean(cover_ind, na.rm = TRUE),
+    n_covered   = sum(cover_ind == 1, na.rm = TRUE),
+    n_uncovered = sum(cover_ind == 0, na.rm = TRUE),
     .groups = "drop"
   )
 
-# ── Scenario-level: collapse to one rate per scenario first 
-# Step 1: one coverage rate per scenario (proportion of 500 reps covered)
-cov_by_scenario <- all_df_gamma |>
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
-  summarise(
-    n_reps    = n(),
-    coverage  = mean(cover_ind, na.rm = TRUE),   # proportion covered in this scenario
-    .groups = "drop"
-  )
-# N = 135 rows (5 treatments × 27 scenarios)
-
-# Step 2: descriptives across those 135 scenario-level rates
-tab_cov_scenario <- cov_by_scenario |>
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
-  summarise(
-    n_reps       = first(n_reps),
-    coverage     = first(coverage),
-    meets_95     = coverage >= 0.95,
-    .groups = "drop"
-  )
-# (This is just cov_by_scenario with a flag added; use it directly for heatmaps etc.)
-
-# Step 3: treatment-level summary ACROSS the 27 scenarios per treatment
-tab_cov_passfail <- cov_by_scenario |>
-  group_by(treatment_fct) |>
-  summarise(
-    n_scenarios   = n(),                          # should be 27
-    mean_cov      = mean(coverage),
-    sd_cov        = sd(coverage),
-    median_cov    = median(coverage),
-    min_cov       = min(coverage),
-    max_cov       = max(coverage),
-    n_pass        = sum(coverage >= 0.95),
-    n_fail        = sum(coverage < 0.95),
-    prop_pass     = mean(coverage >= 0.95),
-    prop_fail     = mean(coverage < 0.95),
-    .groups = "drop"
-  )
-```
-
-
-
-```{r cov_lolli_plot}
-# Step 0: Collapse to one coverage rate per scenario (135 rows)
+# Collapse to scenario-level rates (N = 135)
+# Do this once and reuse below
 cov_by_scenario <- all_df_gamma |>
   group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
   summarise(
@@ -1056,6 +1007,60 @@ cov_by_scenario <- all_df_gamma |>
     .groups  = "drop"
   )
 
+# All 135 scenarios with pass/fail flag
+tab_cov_scenarios <- cov_by_scenario |>
+  mutate(
+    meets_95 = coverage >= 0.95
+  )
+
+# Summarise scenarios by treatment (N = 5, each summarising 27 scenarios)
+# This tells you: across the 27 scenarios for this treatment, how did coverage rates behave?
+tab_cov_by_treatment_scen <- cov_by_scenario |>
+  group_by(treatment_fct) |>
+  summarise(
+    n_scenarios  = n(),
+    mean_cov     = mean(coverage),
+    sd_cov       = sd(coverage),
+    median_cov   = median(coverage),
+    min_cov      = min(coverage),
+    max_cov      = max(coverage),
+    n_pass       = sum(coverage >= 0.95),
+    n_fail       = sum(coverage < 0.95),
+    prop_pass    = mean(coverage >= 0.95),
+    prop_fail    = mean(coverage < 0.95),
+    .groups = "drop"
+  )
+
+fn_save_results(tab_cov_overall)
+fn_save_results(tab_cov_by_treatment_reps)
+fn_save_results(cov_by_scenario)
+fn_save_results(tab_cov_scenarios)
+fn_save_results(tab_cov_by_treatment_scen)
+```  
+
+```{r cov_scen_freqs}
+janitor::tabyl(tab_cov_scenario$meets_95)
+ # tab_cov_scenario$meets_95  n   percent
+ #                     FALSE 91 0.6740741
+ #                      TRUE 44 0.3259259
+
+janitor::tabyl(tab_cov_scenario, treatment_fct, meets_95) |> 
+  janitor::adorn_percentages() |> 
+  janitor::adorn_pct_formatting() |> 
+  janitor::adorn_ns()
+
+ #       treatment_fct      FALSE       TRUE
+ #                No treatment 77.8% (21) 22.2%  (6)
+ #                  Top-coding 59.3% (16) 40.7% (11)
+ #   Mean-preserved top-coding 63.0% (17) 37.0% (10)
+ # Median-preserved top-coding 63.0% (17) 37.0% (10)
+ #                  Truncation 74.1% (20) 25.9%  (7)
+```
+
+
+
+
+```{r cov_lolli_plot}
 # Step 1: Build scenario label
 prep_plot_cov <- cov_by_scenario |>
   mutate(
@@ -1069,11 +1074,9 @@ scenario_order_cov <- prep_plot_cov |>
   arrange(mean_cov) |>
   pull(scenario_short)
 
-# Step 3: Order treatments by number of scenarios below 0.95 (worst to best, left to right)
-treatment_order_cov <- prep_plot_cov |>
-  group_by(treatment_fct) |>
-  summarise(n_below = sum(coverage < 0.95, na.rm = TRUE), .groups = "drop") |>
-  arrange(desc(n_below)) |>
+# Step 3: Order treatments by number of scenarios below 0.95 (worst to best left to right)
+treatment_order_cov <- tab_cov_by_treatment_scen |>
+  arrange(desc(n_fail)) |>
   pull(treatment_fct)
 
 # Step 4: Apply ordering and flag
@@ -1134,6 +1137,11 @@ plot_cov_facet <- prep_plot_cov_ordered |>
   )
 
 plot_cov_facet
+
+ggsave(
+  here::here(paste0("figures/gamma_coverage_lollipop_facet_", dt, ".png")),
+  plot_cov_facet, width = 16, height = 8, dpi = 300
+)
 ```
 
 
@@ -1142,18 +1150,11 @@ plot_cov_facet
 2C. Coverage heatmap vs nominal 0.95  
 ```{r plot_cov_heat}
 # get actual range to set tight limits
-cov_min <- floor(min(summ_gamma$coverage, na.rm = TRUE) * 100) / 100
-cov_max <- ceiling(max(summ_gamma$coverage, na.rm = TRUE) * 100) / 100
+cov_min <- floor(min(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
+cov_max <- ceiling(max(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
 
-plot_cov_heat2 <- summ_gamma %>%
+plot_cov_heat2 <- tab_cov_scenario %>%
   dplyr::mutate(
-    treatment_fct = forcats::fct_relevel(
-      treatment_fct,
-      "No treatment", "Top-coding",
-      "Mean-preserved top-coding",
-      "Median-preserved top-coding",
-      "Truncation"
-    ),
     cell = glue::glue("p={prop_extreme_fct}  mag={magnitude_fct}  n={nobs_fct}"),
     # label: percent format, flag below-95 with asterisk
     cov_label = paste0(
@@ -1894,13 +1895,18 @@ ggsave(here::here(paste0("figures/effect_sizes_", dt, ".png")),
 # A) factorial ANOVA on gamma bias (at rep-level, per meeting with Tsai)
 
 # Set contrasts for Type III SS (m!)
+all_df_att <- all_df_att |> 
+  rename(c(
+    "Treatment" = treatment_fct,
+    "Proportion" = prop_extreme_fct,
+    "Magnitude" = magnitude_fct,
+    "N" = nobs_fct))
 options(contrasts = c("contr.sum", "contr.poly"))
-
 
 # 1: Fit the model
 
 model_att <- aov(
-  abs_bias ~ treatment_fct * nobs_fct * prop_extreme_fct * magnitude_fct, 
+  abs_bias ~ Treatment * N * Proportion * Magnitude, 
   data = all_df_att)
 
 
@@ -1929,10 +1935,6 @@ eta2_reg_df_att <- eta2_regular_att %>%
 eta2_part_df_att <- eta2_partial_att %>%
   as.data.frame() %>%
   select(Parameter, Eta2_partial)
-
-# Tried both of these below, came out the same.
-# eta2_lsr <- lsr::etaSquared(model, type=3)
-# eta2_descTools <- DescTools::EtaSq(model, type=3)
 
 # Combine everything - simplified version (point estimates only)
 options(scipen=999)
@@ -1978,6 +1980,162 @@ combined_table_att_export <- combined_table_att |>
 write.csv(combined_table_att_export,
           here::here(paste0("results/aov_att_type3_", dt, ".csv")),
           row.names = FALSE)
+```
+
+```{r att_anova_plot}
+# Build plot data from ATT ANOVA results
+# Use the numeric versions of columns BEFORE any formatting
+
+plot_data_att <- type3_df_att |>
+  left_join(eta2_reg_df_att, by = c("Term" = "Parameter")) |>
+  filter(Term != "(Intercept)") |>
+  filter(`Pr(>F)` < 0.05) |>
+  mutate(
+    Term = reorder(Term, Eta2),
+    Significant = case_when(
+      `Pr(>F)` < 0.001 ~ "p < .001",
+      `Pr(>F)` < 0.01  ~ "p < .01",
+      `Pr(>F)` < 0.05  ~ "p < .05",
+      TRUE             ~ "ns"
+    )
+  )
+
+n_terms <- nrow(plot_data_att)
+
+p_zoomed_att <- ggplot(
+  plot_data_att, aes(x = Eta2, y = Term, fill = Significant)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue",
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
+    name = "Significance"
+  ) +
+  scale_x_continuous(
+    limits = c(0, 0.25),
+    breaks = seq(0, 0.25, 0.05)
+  ) +
+  labs(
+    title = "A) Zoomed View",
+    x     = "η²",
+    y     = "Effect"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p_full_att <- ggplot(
+  plot_data_att, aes(x = Eta2, y = Term, fill = Significant)) +
+  geom_col() +
+  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red",     alpha = 0.7) +
+  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange",  alpha = 0.7) +
+  geom_vline(xintercept = 0.14, linetype = "dashed", color = "#1a7a1a", alpha = 0.7) +
+  annotate("text", x = 0.01, y = 1, label = "Small", size = 3, color = "red",     hjust = -0.1, vjust = -0.3) +
+  annotate("text", x = 0.06, y = 1, label = "Med",   size = 3, color = "orange",  hjust = -0.1, vjust = -0.3) +
+  annotate("text", x = 0.14, y = 1, label = "Large", size = 3, color = "#1a7a1a", hjust = -0.1, vjust = -0.3) +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue",
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
+    name = "Significance"
+  ) +
+  scale_x_continuous(
+    limits = c(0, 0.25),
+    breaks = seq(0, 0.25, 0.05)
+  ) +
+  labs(
+    title    = "Eta-Squared for Significant Effects: ATT Absolute Bias",
+    subtitle = "Treatment has the largest effect (η² = 0.222, Large); all effects significant at p < .001",
+    x        = "η²",
+    y        = "Effect"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face="bold"),
+        plot.title.position = "plot")
+
+print(p_full_att)
+
+ggsave(
+  here::here(paste0("figures/effect_sizes_att_absbias_", dt, ".png")),
+  p_full_att, width = 10, height = 7, dpi = 300
+)
+
+#library(patchwork)
+#p_combined_att <- p_zoomed_att + p_full_att +
+  # plot_annotation(
+  #   title    = "Eta-Squared for Significant Effects: ATT Absolute Bias",
+  #   subtitle = "Treatment has the largest effect (η² = 0.222, Large); all effects significant at p < .001"
+  # ) *
+  # theme(
+  #   plot.title    = element_text(face = "bold", size = 14),
+  #   plot.subtitle = element_text(size = 11, color = "gray30")
+  # )
+
+# print(p_full_att)
+# 
+# ggsave(
+#   here::here(paste0("figures/effect_sizes_att_absbias_combined_", dt, ".png")),
+#   p_combined_att, width = 14, height = 7, dpi = 300
+# )  
+
+```  
+
+```{r}
+# Compute mean absolute bias for each cell of the 4-way interaction
+foursway_att <- all_df_att |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    .groups = "drop"
+  ) 
+
+pd <- position_dodge(width=0.3) 
+
+plot_4way_att <- ggplot(
+  foursway_att,
+  aes(x = Magnitude, y = mean_abs_bias, color = Treatment, group = Treatment)
+) +
+  # geom_line(linewidth = 0.8, position = pd, alpha = 0.6) +
+  geom_point(size = 2, position = pd) +
+  facet_grid(
+    N ~ Proportion,
+    labeller = labeller(
+      N          = function(x) paste0("N = ", x),
+      Proportion = function(x) paste0("Prop = ", x)
+    )
+  ) +
+  scale_color_manual(
+    name   = "Treatment",
+    values = c(
+      "No treatment"                = "#0072B2",
+      "Top-coding"                  = "#E69F00",
+      "Mean-preserved top-coding"   = "#009E73",
+      "Median-preserved top-coding" = "#CC79A7",
+      "Truncation"                  = "#D55E00"
+    )
+  ) +
+  guides(color = guide_legend(nrow=2))+
+  labs(
+    title    = "Four-Way Interaction: ATT Absolute Bias",
+    subtitle = "Mean absolute bias by treatment, magnitude, proportion of extremes, and sample size",
+    x        = "Magnitude level",
+    y        = "Mean absolute bias"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position     = "bottom",
+    strip.text          = element_text(face = "bold"),
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot"
+  )
+
+plot_4way_att
+
+ggsave(
+  here::here(paste0("figures/att_absbias_4way_interaction_", dt, ".png")),
+  plot_4way_att, width = 12, height = 9, dpi = 300
+)
+
 ```
 
 
