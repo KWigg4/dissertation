@@ -1046,103 +1046,48 @@ tab_cov_passfail <- cov_by_scenario |>
 
 
 
-```{r}
-# ---- Coverage (overall) ----
-
-# All 135 treatment*conditions
-cov_grid <- all_df_gamma %>%
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
-  summarise(coverage = mean(cover_ind, na.rm = TRUE), .groups = "drop")
-
-fn_save_results(cov_grid)
-
-# 5 treatments
-tab_cov_treatment <- all_df_gamma |>
-  group_by(treatment_fct) |>
-  mutate(coverage=mean(cover_ind)) |> 
-  summarise(
-    scenarios = dplyr::n(),
-    mean_cov = mean(coverage, na.rm = TRUE),
-    sd_cov = sd(coverage, na.rm = TRUE),
-    median_cov = median(coverage, na.rm = TRUE),
-    mad_cov = mad(coverage, na.rm = TRUE),
-    min_cov = min(coverage, na.rm = TRUE),
-    # q1_cov = quantile(coverage, 0.25, na.rm = TRUE),
-    # q3_cov = quantile(coverage, 0.75, na.rm = TRUE),
-    # iqr_cov = q3_cov - q1_cov,
-    max_cov = max(coverage, na.rm = TRUE),
-    n_below_95 = sum(coverage < 0.95),
-    prop_below_95 = mean(coverage < 0.95),
-    .groups = "drop"
-  )
-
-write.csv(
-  tab_cov_treatment,
-  here::here("results/tab_cov_treatment_2026-02-24.csv")
-)
-
-# coverage by scenarios (N=135)
-tab_cov_scenario <- all_df_gamma |>
+```{r cov_lolli_plot}
+# Step 0: Collapse to one coverage rate per scenario (135 rows)
+cov_by_scenario <- all_df_gamma |>
   group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
-  mutate(coverage=mean(cover_ind)) |> 
   summarise(
-    scenarios = dplyr::n(),
-    mean_cov = mean(coverage),
-    min_cov = min(coverage),
-    max_cov = max(coverage),
-    n_cov_below_95  = sum(if_else(coverage<0.95,1,0)),
-    p_cov_below_95  = mean(coverage < 0.95, na.rm = TRUE),
-    n_cov_ge_95     = sum(if_else(coverage>=0.95, 1, 0)),
-    p_cov_ge_95     = mean(coverage >= 0.95, na.rm=TRUE),
-    .groups = "drop"
-  )
-write.csv(
-  tab_cov_scenario,
-  here::here("results/tab_cov_scenario_2026-02-17.csv")
-)
-
-# Pass/fail table
-tab_cov_passfail <- tab_cov_scenario |>
-  group_by(treatment_fct) |>
-  summarise(
-    scenarios = dplyr::n(),
-    n_pass = sum(coverage >= 0.95),
-    n_fail = sum(coverage < 0.95),
-    prop_pass = mean(coverage >= 0.95),
-    prop_fail = mean(coverage < 0.95),
-    .groups = "drop"
+    n_reps   = n(),
+    coverage = mean(cover_ind, na.rm = TRUE),
+    .groups  = "drop"
   )
 
-# --- Step 0: build scenario_short ---
-prep_plot_cov <- summ_gamma |>
+# Step 1: Build scenario label
+prep_plot_cov <- cov_by_scenario |>
   mutate(
     scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
   )
 
-# --- Step 1: order scenarios by coverage (worst to best) ---
+# Step 2: Order scenarios by mean coverage across treatments (worst to best)
 scenario_order_cov <- prep_plot_cov |>
   group_by(scenario_short) |>
   summarise(mean_cov = mean(coverage, na.rm = TRUE), .groups = "drop") |>
   arrange(mean_cov) |>
   pull(scenario_short)
 
-# --- Step 2: order treatments by frequency of coverage < 0.95 (worst to best) ---
+# Step 3: Order treatments by number of scenarios below 0.95 (worst to best, left to right)
 treatment_order_cov <- prep_plot_cov |>
   group_by(treatment_fct) |>
   summarise(n_below = sum(coverage < 0.95, na.rm = TRUE), .groups = "drop") |>
   arrange(desc(n_below)) |>
   pull(treatment_fct)
 
-# --- Step 3: apply ordering and coverage flag ---
+# Step 4: Apply ordering and flag
 prep_plot_cov_ordered <- prep_plot_cov |>
   mutate(
     scenario_short = factor(scenario_short, levels = scenario_order_cov),
     treatment_fct  = factor(treatment_fct,  levels = treatment_order_cov),
-    cov_flag       = ifelse(coverage < 0.95, "Below 95%", "At/Above 95%"),
+    cov_flag       = if_else(coverage < 0.95, "Below 95%", "At/Above 95%"),
     cov_flag       = factor(cov_flag, levels = c("At/Above 95%", "Below 95%"))
   )
 
-# --- Step 4: plot ---
+# Step 5: Plot
+y_lower <- min(0.85, min(prep_plot_cov_ordered$coverage, na.rm = TRUE) - 0.01)
+
 plot_cov_facet <- prep_plot_cov_ordered |>
   ggplot(aes(x = scenario_short, y = coverage)) +
   geom_hline(
@@ -1150,26 +1095,20 @@ plot_cov_facet <- prep_plot_cov_ordered |>
     color = "grey30", linewidth = 0.5
   ) +
   geom_segment(
-    aes(x = scenario_short, xend = scenario_short,
-        y = 0.95, yend = coverage, color = cov_flag),
+    aes(
+      x = scenario_short, xend = scenario_short,
+      y = 0.95, yend = coverage,
+      color = cov_flag
+    ),
     linewidth = 0.5
   ) +
-  geom_point(
-    aes(color = cov_flag),
-    size = 2
-  ) +
+  geom_point(aes(color = cov_flag), size = 2) +
   scale_color_manual(
     name   = "Coverage status",
-    values = c(
-      "At/Above 95%" = "#2ca02c",   # green
-      "Below 95%"    = "#d62728"    # red
-    )
+    values = c("At/Above 95%" = "#2ca02c", "Below 95%" = "#d62728")
   ) +
   scale_y_continuous(
-    limits = c(
-      min(0.85, min(prep_plot_cov_ordered$coverage, na.rm = TRUE) - 0.01),
-      1.0
-    ),
+    limits = c(y_lower, 1.0),
     labels = scales::percent_format(accuracy = 1),
     breaks = seq(0.85, 1.0, by = 0.05)
   ) +
@@ -1178,8 +1117,8 @@ plot_cov_facet <- prep_plot_cov_ordered |>
     labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
   ) +
   labs(
-    title    = "Gamma Interaction: Confidence Interval Coverage by Treatment and Scenario",
-    subtitle = "Dashed line = nominal 95%; scenarios ordered worst to best within each panel; treatments ordered worst to best left to right",
+    title    = "Gamma Interaction: CI Coverage by Treatment and Scenario",
+    subtitle = "Dashed line = nominal 95%; scenarios ordered worst to best; treatments ordered worst to best left to right",
     x        = NULL,
     y        = "Coverage"
   ) +
@@ -1195,10 +1134,6 @@ plot_cov_facet <- prep_plot_cov_ordered |>
   )
 
 plot_cov_facet
-ggsave(here::here(paste0("figures/gamma_coverage_lollipop_facet_", dt, ".png")),
-       plot_cov_facet, width = 16, height = 8, dpi = 300)
-
-
 ```
 
 
