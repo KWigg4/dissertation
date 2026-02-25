@@ -72,7 +72,11 @@ all_df_gamma_fails_tbl <- fn_readRDS(all_df_gamma_fails_tbl) # nrow 9
 
 # all_df_gamma only, failures removed. 
 # # # ANALYSIS DATASET for gamma bias ANOVA# # #
-all_df_gamma <- fn_readRDS(all_df_gamma) # nrow 67,371
+all_df_gamma <- fn_readRDS(all_df_gamma) |>  # nrow 67,371
+  rename("Treatment"=treatment_fct,
+         "N" = nobs_fct,
+         "Proportion"=prop_extreme_fct,
+         "Magnitude" = magnitude_fct)
 
 # use for treatment descriptives, RQs 1-3: 
 gamma_by_treatment <- fn_readRDS(gamma_by_treatment) # nrow=5
@@ -81,7 +85,11 @@ gamma_by_treatment <- fn_readRDS(gamma_by_treatment) # nrow=5
 gamma_by_scenario <- fn_readRDS(gamma_by_scenario) # nrow 135
 
 ## Used for analysis, the successful att's at the replicate level:
-all_df_att <- fn_readRDS(all_df_att) # 67,371
+all_df_att <- fn_readRDS(all_df_att) |> # 67,371
+  rename("Treatment"=treatment_fct,
+         "N" = nobs_fct,
+         "Proportion"=prop_extreme_fct,
+         "Magnitude" = magnitude_fct)
 
 ```   
 
@@ -92,13 +100,13 @@ failure_log <- read.csv(here::here("results/failure_log_2026-02-21.csv")) %>%
   mutate(
     n    = as.numeric(n),
     nobs = n * 2,
-    nobs_fct = factor(nobs,
+    N = factor(nobs,
       levels = c(5000, 10000, 20000),
       labels = c("5,000", "10,000", "20,000")),
-    magnitude_fct = factor(magnitude_level,
+    Magnitude = factor(magnitude_level,
       levels = c(1, 2, 3),
       labels = c("1 ($50K–$1M)", "2 ($50K–$2M)", "3 ($50K–$3M)")),
-    prop_extreme_fct = factor(prop_extreme,
+    Proportion = factor(prop_extreme,
       levels = c(0.01, 0.05, 0.10),
       labels = c("0.01", "0.05", "0.10")),
     error_type = case_when(
@@ -124,14 +132,14 @@ summ_grid  <- fn_readRDS(summ_grid) |>
     design_elements, 
     by = c("treatment", "nobs", "prop_extreme", "magnitude_level")) |> 
   select(design_id, model, 
-         nobs, nobs_fct, 
-         prop_extreme, prop_extreme_fct,
-         magnitude_level, magnitude_fct,
-         treatment, treatment_fct,
+         nobs, N, 
+         prop_extreme, Proportion,
+         magnitude_level, Magnitude,
+         treatment, Treatment,
          everything()) |> 
   mutate(
     scen_id = paste0(
-      "prop=", prop_extreme_fct, " | mag=", magnitude_fct, " | n=", nobs_fct),
+      "prop=", Proportion, " | mag=", Magnitude, " | n=", N),
   )
 
 summ_gamma <- summ_grid |> 
@@ -161,26 +169,26 @@ tbl_by_error <- failure_log %>%
 
 # --- Table 2: By condition ---
 tbl_by_condition <- failure_log %>%
-  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  group_by(N, Proportion, Magnitude) %>%
   summarise(n = sum(n_failures), .groups = "drop") %>%
   mutate(
     pct_of_failures = scales::percent(n / total_failures, accuracy = 0.1),
     pct_of_500      = scales::percent(n / 500,            accuracy = 0.1)
   ) %>%
-  arrange(nobs_fct, prop_extreme_fct, magnitude_fct)
+  arrange(N, Proportion, Magnitude)
 
 write.csv(tbl_by_condition,
           here::here("results/tbl_failures_condition_2026-02-22.csv"))
 
 # --- Table 3: All -------
 tbl_reasons_conditions <- failure_log |> 
-  group_by(nobs_fct, prop_extreme_fct, magnitude_fct, error_type) %>%
+  group_by(N, Proportion, Magnitude, error_type) %>%
   summarize(n_fails=sum(n_failures), .groups="drop") |> 
   mutate(
     pct_of_failures = scales::percent(n_fails / total_failures, accuracy = 0.1),
     pct_of_500      = scales::percent(n_fails / 500,            accuracy = 0.1)
   ) %>%
-  arrange(error_type, nobs_fct, prop_extreme_fct, magnitude_fct)
+  arrange(error_type, N, Proportion, Magnitude)
 write.csv(tbl_reasons_conditions,
           here::here("results/tbl_failures_reason_condition_2026-02-22.csv"))
 # --- GT table combining both ---
@@ -208,9 +216,9 @@ tbl_by_condition %>%
     subtitle = "% of 500 reps = failure rate within that condition"
   ) %>%
   cols_label(
-    nobs_fct         = "N (obs)",
-    prop_extreme_fct = "Prop. Extreme",
-    magnitude_fct    = "Magnitude",
+    N         = "N (obs)",
+    Proportion = "Prop. Extreme",
+    Magnitude    = "Magnitude",
     n                = "N Failures",
     pct_of_failures  = "% of All Failures",
     pct_of_500       = "% of 500 Reps"
@@ -224,7 +232,7 @@ tbl_by_condition %>%
 ```{r}
 # checking for balance
 all_df_gamma |>
-  dplyr::group_by(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) |>
+  dplyr::group_by(Treatment, N, Proportion, Magnitude) |>
   dplyr::summarise(n_count=n()) |> 
   View()
 
@@ -265,7 +273,7 @@ write.csv(tbl_bias_overall,
           here::here("results/tbl_bias_overall_2026-02-25.csv"))
 
 tbl_bias_treatment <- all_df_gamma %>%
-  dplyr::group_by(treatment_fct) %>%
+  dplyr::group_by(Treatment) %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
@@ -287,7 +295,7 @@ write.csv(tbl_bias_treatment,
           here::here("results/tbl_bias_treatment_2026-02-25.csv"))
 
 tbl_bias_scen <- all_df_gamma %>%
-  dplyr::group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  dplyr::group_by(Treatment, N, Proportion, Magnitude) %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
@@ -304,47 +312,11 @@ tbl_bias_scen <- all_df_gamma %>%
     share_bias_pos   = mean(bias > 0, na.rm = TRUE),
     .groups = "drop"
   ) |> 
-  arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct)
+  arrange(N, Proportion, Magnitude, Treatment)
 print(tbl_bias_scen)
 
 write.csv(tbl_bias_scen, 
           here::here("results/tbl_bias_scen_2026-02-25.csv"))
-
-gt_bias_treatment <- tbl_bias_treatment %>%
-  dplyr::mutate(
-    dplyr::across(
-      c(mean_bias, sd_bias, median_bias, mad_bias, min_bias, q1_bias, 
-        q3_bias, iqr_bias, max_bias, mean_abs_bias),
-      ~ scales::number(.x, accuracy = 0.01)
-    ),
-    share_bias_neg = scales::percent(share_bias_neg, accuracy = 0.1),
-    share_bias_pos = scales::percent(share_bias_pos, accuracy = 0.1)
-  ) %>%
-  gt::gt() %>%
-  gt::tab_header(
-    title = "Gamma Interaction — Full Descriptive Statistics: Bias",
-    subtitle = "Scenario-level bias (mean signed bias per scenario) summarized across scenarios by treatment"
-  ) %>%
-  gt::cols_label(
-    scenarios      = "N scenarios",
-    mean_bias      = "Mean",
-    sd_bias        = "SD",
-    median_bias    = "Median",
-    mad_bias       = "MAD",
-    min_bias       = "Min",
-    q1_bias        = "Q1",
-    q3_bias        = "Q3",
-    iqr_bias       = "IQR",
-    max_bias       = "Max",
-    mean_abs_bias  = "Mean |bias|",
-    share_bias_neg = "Share bias < 0",
-    share_bias_pos = "Share bias > 0"
-  ) %>%
-  gt::tab_options(data_row.padding = gt::px(1))
-
-gtsave(gt_bias_treatment, here::here("results/tbl_bias_treatment.rtf"))
-
-
 
 ```  
 
@@ -353,7 +325,7 @@ gtsave(gt_bias_treatment, here::here("results/tbl_bias_treatment.rtf"))
 ```{r over_underests}
 # Replicate-level indicator of underestimation for gamma model
 tbl_bias_UnderOver_scen <- all_df_gamma %>%
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  group_by(Treatment, N, Proportion, Magnitude) %>%
   summarise(
     n_under = sum(est < true, na.rm = TRUE), # count of underestimates 
     n_over = sum(est > true, na.rm = TRUE),
@@ -367,7 +339,7 @@ tbl_bias_UnderOver_scen <- all_df_gamma %>%
     pct_over = scales::percent(over_rate, accuracy = 0.1)
   ) |> 
   ungroup() |> 
-  select(treatment_fct, n_design, nobs_fct, prop_extreme_fct, magnitude_fct, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
+  select(Treatment, n_design, N, Proportion, Magnitude, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
   mutate(
      # 'consistently under' if majority of reps are < 0 bias in that scenario
     under_majority = under_rate > 0.5,
@@ -376,7 +348,7 @@ tbl_bias_UnderOver_scen <- all_df_gamma %>%
 
 # Not including, per meeting with Tsai 
 tbl_bias_UnderOver_scen |> 
-  arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) |> 
+  arrange(N, Proportion, Magnitude, Treatment) |> 
   select(-c(under_rate, over_rate)) |> 
   gt() |> 
   gt::gtsave(
@@ -387,9 +359,9 @@ tbl_bias_UnderOver_scen |>
 # tab_consistency <- summ_gamma |>
 #   left_join( 
 #     tbl_bias_UnderOver_scen,
-#     by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
+#     by = c("Treatment", "N", "Proportion", "Magnitude")
 #     ) |>
-#   group_by(treatment_fct) %>%
+#   group_by(Treatment) %>%
 #   summarise(
 #     n_scen = dplyr::n(),
 #     
@@ -410,7 +382,7 @@ tbl_bias_UnderOver_scen |>
 
 ```{r bias_by_scen}
 scenario_summary <- tbl_bias_UnderOver_scen |>
-  group_by(nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  group_by(N, Proportion, Magnitude) |>
   summarise(
     n_treatments = n(),   # should equal number of treatments
 
@@ -450,7 +422,7 @@ scenario_summary |>
 prep_plot_bias_over_under <- summ_gamma |>
   left_join(
     tbl_bias_UnderOver_scen,
-    by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
+    by = c("Treatment", "N", "Proportion", "Magnitude")
   ) |>
   mutate(
     scenario = glue::glue("p={prop_extreme}, n={nobs}, m={magnitude_level}")
@@ -465,7 +437,7 @@ x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.095811
 
 # table 
 tab_27 <- prep_plot_bias_over_under |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scen = n(),   # should be 27
 
@@ -509,7 +481,7 @@ plot_bias_facet <- prep_plot_bias_over_under |>
     name   = "|Bias|"
   ) +
   scale_x_continuous(limits = c(x_min, x_max)) +
-  facet_wrap(~ treatment_fct, nrow = 1) +
+  facet_wrap(~ Treatment, nrow = 1) +
   labs(
     title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
     subtitle = "Red points indicate |bias| > 0.04",
@@ -550,16 +522,16 @@ scenario_order <- prep_plot_bias_over_under |>
 
 # --- Step 2: order treatments by frequency of |bias| > 0.04 (worst to best) ---
 treatment_order <- prep_plot_bias_over_under |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(n_large_bias = sum(abs(bias) > 0.04, na.rm = TRUE), .groups = "drop") |>
   arrange(desc(n_large_bias)) |>
-  pull(treatment_fct)
+  pull(Treatment)
 
 # --- Step 3: apply ordering and bias tiers ---
 prep_plot_bias_ordered <- prep_plot_bias_over_under |>
   mutate(
     scenario_short = factor(scenario_short, levels = scenario_order),
-    treatment_fct  = factor(treatment_fct,  levels = treatment_order),
+    Treatment  = factor(Treatment,  levels = treatment_order),
     bias_tier = case_when(
       abs(bias) > 0.05 ~ ">|0.05|",
       abs(bias) > 0.04 ~ ">|0.04|",
@@ -590,8 +562,8 @@ plot_bias_facet4 <- prep_plot_bias_ordered |>
   ) +
   scale_y_continuous(limits = c(x_min, x_max)) +
   facet_wrap(
-    ~ treatment_fct, nrow = 2,
-    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+    ~ Treatment, nrow = 2,
+    labeller = labeller(Treatment = label_wrap_gen(width = 15))
   ) +
   labs(
     title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
@@ -619,7 +591,7 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet4_", dt, ".png")),
 ```{r plots_dir}
 # did from all_df_gamma and summ_gamma and got exact same plot
 prep_plot_bias_lollipop <- all_df_gamma %>%
-  group_by(treatment_fct) %>%
+  group_by(Treatment) %>%
   summarise(
     mean_of_means = mean(bias, na.rm = TRUE),
     sd_of_means   = sd(bias, na.rm = TRUE),
@@ -630,10 +602,10 @@ prep_plot_bias_lollipop <- all_df_gamma %>%
       mean_of_means < 0, "Underestimation (−)", "Overestimation (+)")) 
 
 plot_bias_lollipop <- prep_plot_bias_lollipop |> 
-  ggplot(aes(x = treatment_fct, y = mean_of_means, color = sign)) +
+  ggplot(aes(x = Treatment, y = mean_of_means, color = sign)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_segment(
-    aes(xend = treatment_fct, y = 0, yend = mean_of_means), linewidth = 1.2) +
+    aes(xend = Treatment, y = 0, yend = mean_of_means), linewidth = 1.2) +
   geom_point(size = 3) +
   scale_color_manual(values = c("Underestimation (−)" = "#C7372F", "Overestimation (+)" = "#2B6CB0")) +
   scale_x_discrete(labels = scales::label_wrap(15))+
@@ -661,9 +633,9 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 plot_trends <- ggplot(
   summ_gamma,
   aes(
-    x = magnitude_fct,
+    x = Magnitude,
     y = bias,
-    color = treatment_fct
+    color = Treatment
   )
 ) +
   geom_hline(yintercept = 0, linetype = "dashed") +
@@ -673,10 +645,10 @@ plot_trends <- ggplot(
     size = 3,
     alpha = 0.7
   ) +
-  facet_grid(nobs_fct ~ prop_extreme_fct, 
+  facet_grid(N ~ Proportion, 
              labeller = labeller(
-               nobs_fct = function(x) paste0("N=",x),
-               prop_extreme_fct = function(x) paste0(
+               N = function(x) paste0("N=",x),
+               Proportion = function(x) paste0(
                  "Prop. Extreme=",x)
                )
              ) +
@@ -713,7 +685,7 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 # ============================================================
 compute_ESE_metrics <- function(
     group_vars = c(
-      "treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")) {
+      "Treatment", "N", "Proportion", "Magnitude")) {
   all_df_gamma |>
     group_by(across(all_of(group_vars))) |>
     summarise(
@@ -745,11 +717,11 @@ compute_ESE_metrics <- function(
 ese_overall      <- compute_ESE_metrics(group_vars = character(0))
 
 # 5 rows: one ESE per treatment, computed from ~13,500 reps each
-ese_by_treatment <- compute_ESE_metrics(group_vars = "treatment_fct")
+ese_by_treatment <- compute_ESE_metrics(group_vars = "Treatment")
 
 # 135 rows: one ESE per treatment*scenario cell, computed from ~500 reps each
 ese_full         <- compute_ESE_metrics(
-  group_vars = c("treatment_fct", "nobs_fct","prop_extreme_fct", "magnitude_fct"))
+  group_vars = c("Treatment", "N","Proportion", "Magnitude"))
 
 # ============================================================
 # Descriptives of the 27 scenario-level ESEs per treatment
@@ -757,7 +729,7 @@ ese_full         <- compute_ESE_metrics(
 # This is a SEPARATE question from ese_by_treatment above
 # ============================================================
 ese_by_treatment_scen_descr <- ese_full |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scen                   = n(),
     # ESE descriptives across 27 scenarios
@@ -797,7 +769,7 @@ fn_save_results(ese_by_treatment_scen_descr)
 
 ```{r descr_empse}
 
-compute_ESE_metrics <- function(df, group_vars = c("treatment_fct","nobs_fct","prop_extreme_fct","magnitude_fct")) {
+compute_ESE_metrics <- function(df, group_vars = c("Treatment","N","Proportion","Magnitude")) {
   
   df |>
     group_by(across(all_of(group_vars))) |>
@@ -841,7 +813,7 @@ fn_save_results(ese_results)
 
 # ---- ese_by_treatment: ----
 ese_by_treatment <- 
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scen = n(),   # should be 27 for each treatment
 
@@ -893,7 +865,7 @@ fn_save_results(ese_by_treatment)
 # --- Step 0: build scenario_short ---
 prep_plot_ese <- ese_results |>
   mutate(
-    scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
+    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
   )
 
 # --- Step 1: order scenarios by frequency of ESE > 0.25 across all treatments ---
@@ -905,16 +877,16 @@ scenario_order_ese <- prep_plot_ese |>
 
 # --- Step 2: order treatments by frequency of ESE > 0.25 (worst to best) ---
 treatment_order_ese <- prep_plot_ese |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(n_large_ese = sum(ese > 0.25, na.rm = TRUE), .groups = "drop") |>
   arrange(desc(n_large_ese)) |>
-  pull(treatment_fct)
+  pull(Treatment)
 
 # --- Step 3: apply ordering and ESE tiers ---
 prep_plot_ese_ordered <- prep_plot_ese |>
   mutate(
     scenario_short = factor(scenario_short, levels = scenario_order_ese),
-    treatment_fct  = factor(treatment_fct,  levels = treatment_order_ese),
+    Treatment  = factor(Treatment,  levels = treatment_order_ese),
     ese_tier = case_when(
       ese > 0.50 ~ ">0.50",
       ese > 0.25 ~ ">0.25",
@@ -948,8 +920,8 @@ plot_ese_facet <- prep_plot_ese_ordered |>
   ) +
   scale_y_continuous(limits = c(ese_y_min, ese_y_max)) +
   facet_wrap(
-    ~ treatment_fct, nrow = 2,
-    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+    ~ Treatment, nrow = 2,
+    labeller = labeller(Treatment = label_wrap_gen(width = 15))
   ) +
   labs(
     title    = "Gamma Interaction: Scenario-Level Empirical SE by Treatment",
@@ -988,7 +960,7 @@ tab_cov_overall <- all_df_gamma |>
 # By treatment, rep-level (N ~13,500 per treatment)
 # This tells you: of all reps under this treatment, what fraction covered?
 tab_cov_by_treatment_reps <- all_df_gamma |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_reps      = n(),
     mean_cov    = mean(cover_ind, na.rm = TRUE),
@@ -1000,7 +972,7 @@ tab_cov_by_treatment_reps <- all_df_gamma |>
 # Collapse to scenario-level rates (N = 135)
 # Do this once and reuse below
 cov_by_scenario <- all_df_gamma |>
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
   summarise(
     n_reps   = n(),
     coverage = mean(cover_ind, na.rm = TRUE),
@@ -1016,7 +988,7 @@ tab_cov_scenarios <- cov_by_scenario |>
 # Summarise scenarios by treatment (N = 5, each summarising 27 scenarios)
 # This tells you: across the 27 scenarios for this treatment, how did coverage rates behave?
 tab_cov_by_treatment_scen <- cov_by_scenario |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scenarios  = n(),
     mean_cov     = mean(coverage),
@@ -1044,12 +1016,12 @@ janitor::tabyl(tab_cov_scenario$meets_95)
  #                     FALSE 91 0.6740741
  #                      TRUE 44 0.3259259
 
-janitor::tabyl(tab_cov_scenario, treatment_fct, meets_95) |> 
+janitor::tabyl(tab_cov_scenario, Treatment, meets_95) |> 
   janitor::adorn_percentages() |> 
   janitor::adorn_pct_formatting() |> 
   janitor::adorn_ns()
 
- #       treatment_fct      FALSE       TRUE
+ #       Treatment      FALSE       TRUE
  #                No treatment 77.8% (21) 22.2%  (6)
  #                  Top-coding 59.3% (16) 40.7% (11)
  #   Mean-preserved top-coding 63.0% (17) 37.0% (10)
@@ -1064,7 +1036,7 @@ janitor::tabyl(tab_cov_scenario, treatment_fct, meets_95) |>
 # Step 1: Build scenario label
 prep_plot_cov <- cov_by_scenario |>
   mutate(
-    scenario_short = glue::glue("p={prop_extreme_fct} n={nobs_fct} m={magnitude_fct}")
+    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
   )
 
 # Step 2: Order scenarios by mean coverage across treatments (worst to best)
@@ -1077,13 +1049,13 @@ scenario_order_cov <- prep_plot_cov |>
 # Step 3: Order treatments by number of scenarios below 0.95 (worst to best left to right)
 treatment_order_cov <- tab_cov_by_treatment_scen |>
   arrange(desc(n_fail)) |>
-  pull(treatment_fct)
+  pull(Treatment)
 
 # Step 4: Apply ordering and flag
 prep_plot_cov_ordered <- prep_plot_cov |>
   mutate(
     scenario_short = factor(scenario_short, levels = scenario_order_cov),
-    treatment_fct  = factor(treatment_fct,  levels = treatment_order_cov),
+    Treatment  = factor(Treatment,  levels = treatment_order_cov),
     cov_flag       = if_else(coverage < 0.95, "Below 95%", "At/Above 95%"),
     cov_flag       = factor(cov_flag, levels = c("At/Above 95%", "Below 95%"))
   )
@@ -1116,8 +1088,8 @@ plot_cov_facet <- prep_plot_cov_ordered |>
     breaks = seq(0.85, 1.0, by = 0.05)
   ) +
   facet_wrap(
-    ~ treatment_fct, nrow = 2,
-    labeller = labeller(treatment_fct = label_wrap_gen(width = 15))
+    ~ Treatment, nrow = 2,
+    labeller = labeller(Treatment = label_wrap_gen(width = 15))
   ) +
   labs(
     title    = "Gamma Interaction: CI Coverage by Treatment and Scenario",
@@ -1155,14 +1127,14 @@ cov_max <- ceiling(max(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
 
 plot_cov_heat2 <- tab_cov_scenario %>%
   dplyr::mutate(
-    cell = glue::glue("p={prop_extreme_fct}  mag={magnitude_fct}  n={nobs_fct}"),
+    cell = glue::glue("p={Proportion}  mag={Magnitude}  n={N}"),
     # label: percent format, flag below-95 with asterisk
     cov_label = paste0(
       scales::number(coverage * 100, accuracy = 0.1), "%",
       ifelse(coverage < 0.95, "*", "")
     )
   ) %>%
-  ggplot(aes(x = treatment_fct, y = cell, fill = coverage)) +
+  ggplot(aes(x = Treatment, y = cell, fill = coverage)) +
   geom_tile(color = "white", linewidth = 0.8) +
   geom_text(
     aes(
@@ -1258,7 +1230,7 @@ fn_save_results(att_est_overall)
 
 # --- Table 1: mean_est descriptives by treatment ---
 att_est_by_treatment <- all_df_att |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scen        = n(),
     est_mean   = mean(est, na.rm = TRUE),
@@ -1274,7 +1246,7 @@ fn_save_results(att_est_by_treatment)
 
 # --- Table 1: mean_est descriptives by scenario ---
 att_est_by_scenario <- all_df_att |>
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
   summarise(
     n_scen        = n(),
     est_mean   = mean(est, na.rm = TRUE),
@@ -1309,7 +1281,7 @@ fn_save_results(att_bias_overall)
 
 # --- Table 2: bias descriptives by treatment ---
 att_bias_by_treatment <- all_df_att |>
-  group_by(treatment_fct) |>
+  group_by(Treatment) |>
   summarise(
     n_scen          = n(),
     mean_bias       = mean(bias, na.rm = TRUE),
@@ -1328,7 +1300,7 @@ att_bias_by_treatment <- all_df_att |>
 fn_save_results(att_bias_by_treatment)
 
 att_bias_by_scenario <- all_df_att |>
-  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
   summarise(
     n_scen          = n(),
     mean_bias       = mean(bias, na.rm = TRUE),
@@ -1359,9 +1331,9 @@ summ_att <- summ_grid |>
 plot_att_est_trends <- ggplot(
   summ_att,
   aes(
-    x     = magnitude_fct,
+    x     = Magnitude,
     y     = mean_est,
-    color = treatment_fct
+    color = Treatment
   )
 ) +
   geom_hline(
@@ -1375,10 +1347,10 @@ plot_att_est_trends <- ggplot(
     alpha = 0.7
   ) +
   facet_grid(
-    nobs_fct ~ prop_extreme_fct,
+    N ~ Proportion,
     labeller = labeller(
-      nobs_fct         = function(x) paste0("N = ", x),
-      prop_extreme_fct = function(x) paste0("Prop. Extreme = ", x)
+      N         = function(x) paste0("N = ", x),
+      Proportion = function(x) paste0("Prop. Extreme = ", x)
     )
   ) +
   scale_color_manual(
@@ -1420,9 +1392,9 @@ ggsave(here::here(paste0("figures/att_est_trends_", dt, ".png")),
 plot_att_bias_trends <- ggplot(
   summ_att,
   aes(
-    x     = magnitude_fct,
+    x     = Magnitude,
     y     = bias,
-    color = treatment_fct
+    color = Treatment
   )
 ) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
@@ -1433,10 +1405,10 @@ plot_att_bias_trends <- ggplot(
     alpha  = 0.7
   ) +
   facet_grid(
-    nobs_fct ~ prop_extreme_fct,
+    N ~ Proportion,
     labeller = labeller(
-      nobs_fct         = function(x) paste0("N = ", x),
-      prop_extreme_fct = function(x) paste0("Prop. Extreme = ", x)
+      N         = function(x) paste0("N = ", x),
+      Proportion = function(x) paste0("Prop. Extreme = ", x)
     )
   ) +
   scale_color_manual(
@@ -1495,7 +1467,7 @@ options(contrasts = c("contr.sum", "contr.poly"))
 # 1: Fit the model
 
 model <- aov(
-  bias ~ treatment_fct * nobs_fct * prop_extreme_fct * magnitude_fct, 
+  bias ~ Treatment * N * Proportion * Magnitude, 
   data = all_df_gamma)
 
 
@@ -1705,7 +1677,7 @@ base_theme <- theme_minimal(base_size = 11) +
 
 # ---- Shared mean + SE summaries ----
 means_trt_nobs <- all_df_gamma |>
-  group_by(treatment_fct, nobs_fct) |>
+  group_by(Treatment, N) |>
   summarise(
     mean_bias = mean(bias, na.rm = TRUE),
     se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
@@ -1713,7 +1685,7 @@ means_trt_nobs <- all_df_gamma |>
   )
 
 means_trt_prop <- all_df_gamma |>
-  group_by(treatment_fct, prop_extreme_fct) |>
+  group_by(Treatment, Proportion) |>
   summarise(
     mean_bias = mean(bias, na.rm = TRUE),
     se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
@@ -1727,7 +1699,7 @@ means_trt_prop <- all_df_gamma |>
 # ---- Means-only: faceted by treatment ----
 
 plot_means_trt_nobs_facet <- means_trt_nobs |>
-  ggplot(aes(x = nobs_fct, y = mean_bias, group = 1)) +
+  ggplot(aes(x = N, y = mean_bias, group = 1)) +
   geom_hline(yintercept = 0, linetype = "dashed",
              color = "grey30", linewidth = 0.4) +
   geom_line(linewidth = 0.9, color = "steelblue") +
@@ -1737,8 +1709,8 @@ plot_means_trt_nobs_facet <- means_trt_nobs |>
     width = 0.15, linewidth = 0.6, color = "steelblue"
   ) +
   geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ treatment_fct, nrow = 1,
-             labeller = labeller(treatment_fct = label_wrap_gen(width = 15))) +
+  facet_wrap(~ Treatment, nrow = 1,
+             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
   labs(
     title    = "Gamma Interaction Bias: Treatment × Sample Size",
     subtitle = expression(paste(
@@ -1751,7 +1723,7 @@ plot_means_trt_nobs_facet <- means_trt_nobs |>
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 plot_means_trt_prop_facet <- means_trt_prop |>
-  ggplot(aes(x = prop_extreme_fct, y = mean_bias, group = 1)) +
+  ggplot(aes(x = Proportion, y = mean_bias, group = 1)) +
   geom_hline(yintercept = 0, linetype = "dashed",
              color = "grey30", linewidth = 0.4) +
   geom_line(linewidth = 0.9, color = "steelblue") +
@@ -1761,8 +1733,8 @@ plot_means_trt_prop_facet <- means_trt_prop |>
     width = 0.15, linewidth = 0.6, color = "steelblue"
   ) +
   geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ treatment_fct, nrow = 1,
-             labeller = labeller(treatment_fct = label_wrap_gen(width = 15))) +
+  facet_wrap(~ Treatment, nrow = 1,
+             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
   labs(
     title    = "Gamma Interaction Bias: Treatment × Proportion Extreme",
     subtitle = expression(paste(
@@ -1897,10 +1869,10 @@ ggsave(here::here(paste0("figures/effect_sizes_", dt, ".png")),
 # Set contrasts for Type III SS (m!)
 all_df_att <- all_df_att |> 
   rename(c(
-    "Treatment" = treatment_fct,
-    "Proportion" = prop_extreme_fct,
-    "Magnitude" = magnitude_fct,
-    "N" = nobs_fct))
+    "Treatment" = Treatment,
+    "Proportion" = Proportion,
+    "Magnitude" = Magnitude,
+    "N" = N))
 options(contrasts = c("contr.sum", "contr.poly"))
 
 # 1: Fit the model
