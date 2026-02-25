@@ -558,19 +558,8 @@ write.csv(failure_log,
 
 ```{r}
 # If needed, can re-enter all_df
-# all_df <- readRDS(here::here("results/all_df_2026-02-21.RDS"))
+all_df <- readRDS(here::here("results/all_df_2026-02-21.RDS"))
 ```  
-
-
-### Summarise results
-
-# SE comparison:
-#   emp_se        = Monte Carlo SD of estimates across reps (true sampling variability)
-#   mean_model_se = average of the per-rep model-reported SEs
-#   se_ratio      = mean_model_se / emp_se; near 1 = well-calibrated,
-#                   <1 = model underestimates SE (anti-conservative), >1 = overestimates 
-# (conservative)
-#   se_bias       = mean_model_se - emp_se; absolute difference for scale context
 
 ```{r fn_factors}
 # ---- Helper: shared factor mutations ----
@@ -598,55 +587,119 @@ add_factors <- function(df) {
 }
 ```  
 
+
+### Summarise results
+
+SE comparison:
+   emp_se        = Monte Carlo SD of estimates across reps (true sampling variability)
+   mean_model_se = average of the per-rep model-reported SEs
+   se_ratio      = mean_model_se / emp_se; near 1 = well-calibrated,
+                   <1 = model underestimates SE (anti-conservative), >1 = overestimates 
+ (conservative)
+   se_bias       = mean_model_se - emp_se; absolute difference for scale context
+
+
+
 ```{r all_df_gamma}
 # ---- all_df_gamma (replicate-level, with coverage indicator) ----
-all_df_gamma_w_fails <- all_df %>%
-  filter(model == "gamma") %>%
-  mutate(
-    nobs      = n * 2,
-    cover_ind = if_else(
-      is.na(est) | is.na(se), NA_real_,
-      as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se))),
-    n               = as.factor(n),
-    prop_extreme    = as.factor(prop_extreme),
-    magnitude_level = as.factor(magnitude_level),
-    treatment       = forcats::fct_relevel(
-      treatment, "raw", "topcode", "mean_adj", "median_adj", "truncate")
-  ) %>%
-  relocate(nobs, .after = n) %>%
-  add_factors()
 
-all_df_gamma <- all_df_gamma_w_fails %>% filter(!is.na(cover_ind))
+all_df_w_fails <- all_df |> 
+	# because the n is per person, the nobs is sample size
+	mutate(nobs=n*2,
+				 abs_bias = round(abs(bias), 6),
+				 cover_ind = if_else(
+				 	is.na(est) | is.na(se), NA_real_, 
+				 	as.numeric((est - 1.96*se <= true) & (true <= est + 1.96*se)))
+				 ) |> 
+	add_factors() |> 
+	# reordering:
+	select(model, n, nobs, nobs_fct, prop_extreme, prop_extreme_fct,
+				 magnitude_level, magnitude_fct, treatment, treatment_fct,
+				 est, se, true, bias, failed, logit_error, gamma_error,
+				 everything()
+	)
+# N=202,500 (includes 67500 each for logit, gamma, and ATT models)
+	
+all_df_gamma_w_fails <- all_df_w_fails %>% filter(model == "gamma")
 
-all_df_gamma_fails     <- all_df_gamma_w_fails %>% filter(is.na(cover_ind))
+all_df_gamma <- all_df_gamma_w_fails %>% filter(!is.na(cover_ind)) #N=67,371
+
+all_df_gamma_fails     <- all_df_gamma_w_fails %>% 
+	filter(model=="gamma") |> 
+	filter(is.na(cover_ind)) # N=129 
+
 all_df_gamma_fails_tbl <- all_df_gamma_fails %>%
-  group_by(treatment, nobs, prop_extreme, magnitude_level) %>%
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
   summarise(n = n(), .groups = "drop") %>%
   mutate(prop_of_500 = n / 500)
 
-fn_save_results(all_df_gamma)
+# Get statistics for empse, coverage by treatment
+gamma_by_treatment <- all_df_gamma %>%
+  group_by(treatment_fct) %>%
+  summarise(
+    mean_est      = round(mean(est, na.rm = TRUE), 6),
+    mean_true     = round(mean(true, na.rm = TRUE), 6),
+    bias          = round(mean(bias, na.rm = TRUE), 6),
+    mean_abs_bias = round(mean(abs_bias, na.rm=TRUE), 6),
+    emp_se        = round(sd(est, na.rm = TRUE), 6),
+    mean_model_se = round(mean(se, na.rm = TRUE), 6),
+    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage      = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
+      6
+    ),
+    n_fail    = sum(is.na(est)),
+    n_pass    = 500 - n_fail,
+    prop_fail = n_fail/500,
+    prop_pass = n_pass/500,
+    .groups = "drop"
+  )
+
+gamma_by_scenario <- all_df_gamma %>%
+  group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
+  summarise(
+    mean_est      = round(mean(est, na.rm = TRUE), 6),
+    mean_true     = round(mean(true, na.rm = TRUE), 6),
+    bias          = round(mean(bias, na.rm = TRUE), 6),
+    mean_abs_bias = round(mean(abs_bias, na.rm=TRUE), 6),
+    emp_se        = round(sd(est, na.rm = TRUE), 6),
+    mean_model_se = round(mean(se, na.rm = TRUE), 6),
+    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage      = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
+      6
+    ),
+    n_fail    = sum(is.na(est)),
+    n_pass    = 500 - n_fail,
+    prop_fail = n_fail/500,
+    prop_pass = n_pass/500,
+    .groups = "drop"
+  )
+
+fn_save_results(all_df)
+fn_save_results(all_df_w_fails)
 fn_save_results(all_df_gamma_w_fails)
+fn_save_results(all_df_gamma)
 fn_save_results(all_df_gamma_fails)
 fn_save_results(all_df_gamma_fails_tbl)
+fn_save_results(gamma_by_treatment)
+fn_save_results(gamma_by_scenario)
+
 ```  
 
 ```{r all_df_att}
 # ---- all_df_att ----
-all_df_att <- all_df %>%
+all_df_att <- all_df_w_fails %>%
   filter(model == "ATT", !is.na(est)) %>%
-  mutate(
-    nobs      = as.numeric(as.character(n)) * 2,
-    abs_bias  = abs(bias),
-    n         = as.factor(n),
-    prop_extreme    = as.factor(prop_extreme),
-    magnitude_level = as.factor(magnitude_level),
-    treatment       = as.factor(treatment)
-  ) %>%
-  add_factors() %>%
   select(model, est, true, bias, abs_bias,
          nobs, nobs_fct, prop_extreme, prop_extreme_fct,
          magnitude_level, magnitude_fct, treatment, treatment_fct,
-         everything())
+         everything()) |> 
+	select(-c(se, logit_error, gamma_error, gamma_shape, cover_ind))
 
 fn_save_results(all_df_att)
 ```

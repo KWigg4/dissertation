@@ -60,6 +60,30 @@ q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
 
 ```{r get_replicates}
+# all_df_treatment: summarized at the treatment level only (N=13500 per)
+all_df <- readRDS(here::here("results/all_df_2026-02-21.RDS"))
+
+all_df_treatment <- all_df %>%
+  group_by(treatment_fct) %>%
+  summarise(
+    mean_est      = round(mean(est, na.rm = TRUE), 6),
+    mean_true     = round(mean(true, na.rm = TRUE), 6),
+    bias          = round(mean(bias, na.rm = TRUE), 6),
+    emp_se        = round(sd(est, na.rm = TRUE), 6),
+    mean_model_se = round(mean(se, na.rm = TRUE), 6),
+    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+    coverage      = round(
+      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
+      6
+    ),
+    n_fail    = sum(is.na(est)),
+    n_pass    = 500 - n_fail,
+    prop_fail = n_fail/500,
+    prop_pass = n_pass/500,
+    .groups = "drop"
+  )
 
 ## Used for analysis, the successful gammas at the replicate level:
 all_df_gamma <- fn_readRDS(all_df_gamma) |> 
