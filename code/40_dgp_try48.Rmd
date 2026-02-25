@@ -708,7 +708,7 @@ all_df_att <- all_df_w_fails %>%
          nobs, nobs_fct, prop_extreme, prop_extreme_fct,
          magnitude_level, magnitude_fct, treatment, treatment_fct,
          everything()) |> 
-	select(-c(se, logit_error, gamma_error, gamma_shape, cover_ind))
+	select(-c(se, logit_error, gamma_error, gamma_shape, cover_ind, failed))
 
 fn_save_results(all_df_att)
 ```

@@ -47,10 +47,10 @@ fn_save_results <- function(df) {
   write.csv(df,here::here(paste0("results/",name,"_",dt, ".csv")))
 }
 
-# Reads datasets created on 02-21:
+# Reads datasets created on 02-25:
 fn_readRDS <- function(ds) {
   ds <- deparse(substitute(ds))
-  readRDS(here::here(paste0("results/",ds,"_2026-02-21.RDS")))
+  readRDS(here::here(paste0("results/",ds,"_2026-02-25.RDS")))
 }
 
 # Helper for quantiles
@@ -61,47 +61,27 @@ q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
 ```{r get_replicates}
 # all_df_treatment: summarized at the treatment level only (N=13500 per)
-all_df <- readRDS(here::here("results/all_df_2026-02-21.RDS"))
+# all_df_2026-02-21 is unformatted/ unchanged from MC sim, DO NOT REMOVE from files. 
+# all_df_2026-02-25 is transformed. 
 
-all_df_treatment <- all_df %>%
-  group_by(treatment_fct) %>%
-  summarise(
-    mean_est      = round(mean(est, na.rm = TRUE), 6),
-    mean_true     = round(mean(true, na.rm = TRUE), 6),
-    bias          = round(mean(bias, na.rm = TRUE), 6),
-    emp_se        = round(sd(est, na.rm = TRUE), 6),
-    mean_model_se = round(mean(se, na.rm = TRUE), 6),
-    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
-    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
-    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
-    coverage      = round(
-      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE),
-      6
-    ),
-    n_fail    = sum(is.na(est)),
-    n_pass    = 500 - n_fail,
-    prop_fail = n_fail/500,
-    prop_pass = n_pass/500,
-    .groups = "drop"
-  )
+all_df_w_fails <- fn_readRDS(all_df_w_fails) # nrow 202500
+all_df_gamma_w_fails <- fn_readRDS(all_df_gamma_w_fails) 
+# FAILURES ONLY: 
+all_df_gamma_fails <- fn_readRDS(all_df_gamma_fails) # nrow 129
+all_df_gamma_fails_tbl <- fn_readRDS(all_df_gamma_fails_tbl) # nrow 9
 
-## Used for analysis, the successful gammas at the replicate level:
-all_df_gamma <- fn_readRDS(all_df_gamma) |> 
-  relocate(nobs_fct, .after = nobs) |> 
-  relocate(prop_extreme_fct, .after=prop_extreme) |> 
-  relocate(magnitude_fct, .after=magnitude_level) |> 
-  relocate(treatment_fct, .after=treatment)
-## N=67,371
+# all_df_gamma only, failures removed. 
+# # # ANALYSIS DATASET for gamma bias ANOVA# # #
+all_df_gamma <- fn_readRDS(all_df_gamma) # nrow 67,371
 
-## All n=67500 expected replicates with failure status:
-all_df_gamma_w_fails <- fn_readRDS(all_df_gamma_w_fails)
+# use for treatment descriptives, RQs 1-3: 
+gamma_by_treatment <- fn_readRDS(gamma_by_treatment) # nrow=5
 
-## Only the failures (N=129): 
-all_df_gamma_fails <- fn_readRDS(all_df_gamma_fails)
+# use for scenario descriptives, RQs 1-3: 
+gamma_by_scenario <- fn_readRDS(gamma_by_scenario) # nrow 135
 
-# ATT
-## 
-all_df_att <- fn_readRDS(all_df_att)
+## Used for analysis, the successful att's at the replicate level:
+all_df_att <- fn_readRDS(all_df_att) # 67,371
 
 ```   
 
@@ -130,7 +110,7 @@ failure_log <- read.csv(here::here("results/failure_log_2026-02-21.csv")) %>%
 ```
 
 
-```{r get_summ_grid}
+```{r get_summ_grid, eval=FALSE}
 
 # Get design id and n_design from summ_gamma 
 design_elements <- fn_readRDS(summ_gamma) |> 
@@ -244,13 +224,9 @@ tbl_by_condition %>%
 ```{r}
 # checking for balance
 all_df_gamma |>
-  dplyr::group_by(nobs, prop_extreme, magnitude_level, treatment) |>
+  dplyr::group_by(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) |>
   dplyr::summarise(n_count=n()) |> 
   View()
-
-all_df_gamma |>
-  dplyr::count(nobs, prop_extreme, magnitude_level, treatment) |>
-  dplyr::count(nobs)
 
 ```  
 
@@ -286,7 +262,7 @@ tbl_bias_overall <- all_df_gamma %>%
 
 print(tbl_bias_overall)
 write.csv(tbl_bias_overall, 
-          here::here("results/tbl_bias_overall_2026-02-22.csv"))
+          here::here("results/tbl_bias_overall_2026-02-25.csv"))
 
 tbl_bias_treatment <- all_df_gamma %>%
   dplyr::group_by(treatment_fct) %>%
@@ -308,7 +284,7 @@ tbl_bias_treatment <- all_df_gamma %>%
   )
 print(tbl_bias_treatment)
 write.csv(tbl_bias_treatment, 
-          here::here("results/tbl_bias_treatment_2026-02-23.csv"))
+          here::here("results/tbl_bias_treatment_2026-02-25.csv"))
 
 tbl_bias_scen <- all_df_gamma %>%
   dplyr::group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
@@ -332,7 +308,7 @@ tbl_bias_scen <- all_df_gamma %>%
 print(tbl_bias_scen)
 
 write.csv(tbl_bias_scen, 
-          here::here("results/tbl_bias_scen_2026-02-23.csv"))
+          here::here("results/tbl_bias_scen_2026-02-25.csv"))
 
 gt_bias_treatment <- tbl_bias_treatment %>%
   dplyr::mutate(
@@ -408,28 +384,28 @@ tbl_bias_UnderOver_scen |>
 )
 
 # Aggregate to treatment-level “consistency” table
-tab_consistency <- summ_gamma |>
-  left_join( 
-    tbl_bias_UnderOver_scen,
-    by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
-    ) |>
-  group_by(treatment_fct) %>%
-  summarise(
-    n_scen = dplyr::n(),
-    
-    total_under = sum(n_under, na.rm = TRUE), # total reps underestimating 
-    total_over = sum(n_over, na.rm = TRUE), # total reps overestimating 
-    total_reps = sum(n_scen, na.rm = TRUE), # total reps across scenarios 
-    
-    avg_under_per_scen = mean(n_under, na.rm = TRUE), 
-    avg_over_per_scen = mean(n_over, na.rm = TRUE),
-    
-    share_scen_under = mean(bias < 0, na.rm = TRUE),  
-    # % scenarios with negative mean bias
-    share_scen_over  = mean(bias > 0, na.rm = TRUE),
-    share_scen_under_majority = mean(under_majority, na.rm = TRUE),
-    .groups = "drop"
-  )
+# tab_consistency <- summ_gamma |>
+#   left_join( 
+#     tbl_bias_UnderOver_scen,
+#     by = c("treatment_fct", "nobs_fct", "prop_extreme_fct", "magnitude_fct")
+#     ) |>
+#   group_by(treatment_fct) %>%
+#   summarise(
+#     n_scen = dplyr::n(),
+#     
+#     total_under = sum(n_under, na.rm = TRUE), # total reps underestimating 
+#     total_over = sum(n_over, na.rm = TRUE), # total reps overestimating 
+#     total_reps = sum(n_scen, na.rm = TRUE), # total reps across scenarios 
+#     
+#     avg_under_per_scen = mean(n_under, na.rm = TRUE), 
+#     avg_over_per_scen = mean(n_over, na.rm = TRUE),
+#     
+#     share_scen_under = mean(bias < 0, na.rm = TRUE),  
+#     # % scenarios with negative mean bias
+#     share_scen_over  = mean(bias > 0, na.rm = TRUE),
+#     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
+#     .groups = "drop"
+#   )
 ```    
 
 ```{r bias_by_scen}
@@ -732,12 +708,14 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 ## RQ2: Empirical SE  
 
 
+
+
 ```{r descr_empse}
 
-compute_ESE_metrics <- function(df) {
+compute_ESE_metrics <- function(df, group_vars = c("treatment_fct","nobs_fct","prop_extreme_fct","magnitude_fct")) {
   
   df |>
-    group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) |>
+    group_by(across(all_of(group_vars))) |>
     summarise(
 
       # --- Core ESE (one value per scenario-treatment cell) ---
@@ -772,11 +750,12 @@ compute_ESE_metrics <- function(df) {
     )
 }
 
-ese_results <- compute_ESE_metrics(all_df_gamma)
+# Overall
+ese_results <- compute_ESE_metrics(all_df_gamma, group_vars = character(0))
 fn_save_results(ese_results)
 
-# ---- ese_by_treatment: aggregate 135 scenario cells → 5 treatment rows ----
-ese_by_treatment <- ese_results |>
+# ---- ese_by_treatment: ----
+ese_by_treatment <- 
   group_by(treatment_fct) |>
   summarise(
     n_scen = n(),   # should be 27 for each treatment
