@@ -657,7 +657,7 @@ gamma_by_treatment <- all_df_gamma %>%
     .groups = "drop"
   )
 
-gamma_by_scenario <- all_df_gamma %>%
+gamma_by_scenario <- all_df_gamma_w_fails %>%
   group_by(treatment_fct, nobs_fct, prop_extreme_fct, magnitude_fct) %>%
   summarise(
     mean_est      = round(mean(est, na.rm = TRUE), 6),
@@ -676,9 +676,18 @@ gamma_by_scenario <- all_df_gamma %>%
     n_fail    = sum(is.na(est)),
     n_pass    = 500 - n_fail,
     prop_fail = n_fail/500,
-    prop_pass = n_pass/500,
-    .groups = "drop"
-  )
+    prop_pass = n_pass/500
+  ) |> 
+	arrange(nobs_fct, prop_extreme_fct, magnitude_fct, treatment_fct) %>%
+  mutate(
+    ind_bias_pos  = ifelse(bias > 0, 1, 0),
+    ind_bias_neg  = ifelse(bias < 0, 1, 0),
+    n_bias_pos    = sum(ind_bias_pos),
+    prop_bias_pos = n_bias_pos / 5,
+    n_bias_neg    = sum(ind_bias_neg),
+    prop_bias_neg = n_bias_neg / 5
+  ) %>%
+  ungroup()
 
 fn_save_results(all_df)
 fn_save_results(all_df_w_fails)
@@ -706,32 +715,31 @@ fn_save_results(all_df_att)
 
 
 
-```{r summ_grid_summ_gamma}
+```{r summ_grid_summ_gamma, eval=FALSE, include=FALSE}
 # ---- summ_grid + summ_gamma ----
-summ_grid <- all_df %>%
-  group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
-  summarise(
-    mean_est      = round(mean(est, na.rm = TRUE), 6),
-    mean_true     = round(mean(true, na.rm = TRUE), 6),
-    bias          = round(mean(bias, na.rm = TRUE), 6),
-    emp_se        = round(sd(est, na.rm = TRUE), 6),
-    mean_model_se = round(mean(se, na.rm = TRUE), 6),
-    se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
-    se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
-    rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
-    coverage      = round(
-      mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE), 6),
-    n_fail    = sum(is.na(est)),
-    n_pass    = 500 - n_fail,
-    prop_fail = n_fail / 500,
-    prop_pass = n_pass / 500,
-    .groups = "drop"
-  ) %>%
-  mutate(nobs = n * 2, abs_bias = abs(bias)) %>%
-  add_factors()
+# summ_grid <- all_df %>%
+#   group_by(model, n, prop_extreme, magnitude_level, treatment) %>%
+#   summarise(
+#     mean_est      = round(mean(est, na.rm = TRUE), 6),
+#     mean_true     = round(mean(true, na.rm = TRUE), 6),
+#     bias          = round(mean(bias, na.rm = TRUE), 6),
+#     emp_se        = round(sd(est, na.rm = TRUE), 6),
+#     mean_model_se = round(mean(se, na.rm = TRUE), 6),
+#     se_ratio      = round(mean(se, na.rm = TRUE) / sd(est, na.rm = TRUE), 6),
+#     se_bias       = round(mean(se, na.rm = TRUE) - sd(est, na.rm = TRUE), 6),
+#     rmse          = round(sqrt(mean((est - true)^2, na.rm = TRUE)), 6),
+#     coverage      = round(
+#       mean((est - 1.96*se <= true) & (true <= est + 1.96*se), na.rm = TRUE), 6),
+#     n_fail    = sum(is.na(est)),
+#     n_pass    = 500 - n_fail,
+#     prop_fail = n_fail / 500,
+#     prop_pass = n_pass / 500,
+#     .groups = "drop"
+#   ) %>%
+#   mutate(nobs = n * 2, abs_bias = abs(bias)) %>%
+#   add_factors()
 
-summ_gamma <- summ_grid %>%
-  filter(model == "gamma") %>%
+summ_gamma <- all_df_gamma %>%
   mutate(
     treatment_fct = forcats::fct_relevel(
       treatment_fct, "No treatment", "Top-coding", "Mean-preserved top-coding",
