@@ -123,7 +123,58 @@ treatment_order_3row <- c(
 ```{r make_lolli_panel}
 
 # Single-panel builder shared by both bias and ESE chunks
+# yvar2: optional second numeric column (unquoted) plotted as small grey dots
+#        on top of the lollipop — used for model SE on ESE panels. (for modse)
+make_lolly_panel <- function(
+    data,
+    yvar,           # unquoted: bias or ese
+    tier_var,       # unquoted: bias_tier or ese_tier
+    y_limits,
+    tier_colors,    # named colour vector
+    tier_name,      # legend title
+    panel_title,
+    show_x_axis,    # TRUE only for bottom-row panels
+    show_y_axis,    # TRUE only for left-column panels
+    y_label = "",
+    hline = 0,      # reference line (0 for bias and ESE)
+    yvar2 = NULL    # optional: unquoted col for a second grey dot series
+) {
+  p <- ggplot(data, aes(x = scenario_id, y = {{ yvar }})) +
+    geom_hline(yintercept = hline, linetype = "dashed",
+               color = "grey30", linewidth = 0.4) +
+    geom_segment(
+      aes(xend = scenario_id, y = hline, yend = {{ yvar }}),
+      linewidth = 0.5, color = "grey65"
+    ) +
+    geom_point(aes(color = {{ tier_var }}), size = 2.2)
 
+  # Add second series (model SE) as grey dots if supplied
+  if (!is.null(substitute(yvar2))) {
+    p <- p + geom_point(aes(y = {{ yvar2 }}),
+                        shape = 1, size = 1.8,
+                        color = "grey40", alpha = 0.7)
+  }
+
+  p +
+    scale_color_manual(name = tier_name, values = tier_colors) +
+    scale_y_continuous(limits = y_limits) +
+    scale_x_discrete(breaks = scenario_id_levels,
+                     limits = scenario_id_levels) +
+    ggtitle(panel_title) +
+    labs(y = if (show_y_axis) y_label else "") +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid.major.x  = element_blank(),
+      panel.grid.minor    = element_blank(),
+      plot.title          = element_text(face = "bold", size = 10, hjust = 0.5),
+      legend.position     = "none",
+      axis.text.x  = if (show_x_axis) element_text(size = 8) else element_blank(),
+      axis.ticks.x = if (show_x_axis) element_line() else element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = if (show_y_axis) element_text(size = 9) else element_blank(),
+      axis.text.y  = element_text(size = 8)
+    )
+}
 ```
 
 
@@ -527,12 +578,14 @@ p_b3 <- make_bias("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
 p_b4 <- make_bias("Top-coding",                  show_x = TRUE,  show_y = TRUE)
 p_b5 <- make_bias("Truncation",                  show_x = TRUE,  show_y = FALSE)
 
-# Extract shared legend from a version with legend enabled
-shared_bias_legend <- (
-  p_b1 + theme(legend.position = "bottom",
-               legend.title = element_text(size = 9),
-               legend.text  = element_text(size = 9))
-) |> cowplot::get_legend()
+# Extract shared legend via gtable
+tmp_bias <- p_b1 +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 9),
+        legend.text  = element_text(size = 9))
+shared_bias_legend <- gtable::gtable_filter(
+  ggplot2::ggplotGrob(tmp_bias), "guide-box"
+)
 
 # Compose: top-right slot = plot_spacer()
 bias_patch <- (
@@ -540,25 +593,26 @@ bias_patch <- (
     p_b2 + p_b3 +
     p_b4 + p_b5
   ) +
-  plot_layout(nrow = 3, ncol = 2, byrow = TRUE) +
-  plot_annotation(
-    title    = "Gamma Interaction: Scenario-Level Mean Bias by Treatment",
-    subtitle = "X-axis: scenario ID 1-27 (see companion table). Dashed line = zero bias.",
-    theme = theme(
-      plot.title    = element_text(face = "bold", size = 13),
-      plot.subtitle = element_text(size = 10, color = "grey40")
-    )
-  )
+  plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
+
+# Title/subtitle added via cowplot below (avoids patchwork theme conflict)
+bias_title    <- "Gamma Interaction: Scenario-Level Mean Bias by Treatment"
+bias_subtitle <- "X-axis: scenario ID 1-27*. Dashed line = zero bias."
 
 # Attach shared x-axis label and legend beneath
 x_label_bias <- cowplot::ggdraw() +
-  cowplot::draw_label("Scenario ID", fontsize = 10, hjust = 0.5)
+  cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
 
 plot_bias_3row <- cowplot::plot_grid(
+  cowplot::plot_grid(
+    cowplot::ggdraw() + cowplot::draw_label(bias_title,    fontface = "bold", size = 13, hjust = 0.5),
+    cowplot::ggdraw() + cowplot::draw_label(bias_subtitle, size = 10, colour = "grey40", hjust = 0.5),
+    ncol = 1, rel_heights = c(0.6, 0.4)
+  ),
   bias_patch,
   cowplot::plot_grid(x_label_bias, shared_bias_legend,
                      ncol = 1, rel_heights = c(0.35, 0.65)),
-  ncol = 1, rel_heights = c(1, 0.07)
+  ncol = 1, rel_heights = c(0.1, 1, 0.15)
 )
 
 plot_bias_3row
@@ -567,6 +621,7 @@ ggsave(
   here::here(paste0("figures/gamma_bias_lollipop_3row_", dt, ".png")),
   plot_bias_3row, width = 13, height = 13, dpi = 300
 )
+
 ```
 
 
@@ -873,182 +928,85 @@ fn_save_results(ese_by_treatment_scen_descr)
 
 
 
-```{r descr_empse, eval=FALSE, include=FALSE}
-
-compute_ESE_metrics <- function(df, group_vars = c("Treatment","N","Proportion","Magnitude")) {
-  
-  df |>
-    group_by(across(all_of(group_vars))) |>
-    summarise(
-
-      # --- Core ESE (one value per scenario-treatment cell) ---
-      ese      = sd(est, na.rm = TRUE),
-      mcse_ese = sd(est, na.rm = TRUE) / sqrt(n()),  # MC uncertainty of ESE itself
-
-      # --- Model SE summaries (averaged across reps in cell) ---
-      se_model_mean   = mean(se, na.rm = TRUE),
-      se_model_median = median(se, na.rm = TRUE),
-
-      # --- Morris (2019) calibration metrics ---
-      ratio_modse_emp  = se_model_mean / ese,   # <1 = underest; >1 = overest
-      rel_error_modse  = 100 * (se_model_mean / ese - 1),   
-       
-      rmse_se          = sqrt(mean((se - ese)^2, na.rm = TRUE)),
-
-      # --- Replicate-level SE calibration flag ---
-      prop_under_se     = mean(se < ese, na.rm = TRUE),    
-        
-      under_majority_se = prop_under_se > 0.5,
-
-      # --- Descriptives of the ESTIMATE distribution (not ESE) ---
-      # Renamed clearly so they're not confused with ESE summaries
-      est_mean   = mean(est, na.rm = TRUE),
-      est_median = median(est, na.rm = TRUE),
-      est_sd     = sd(est, na.rm = TRUE),       # same as ese, kept for clarity
-      est_mad    = mad(est, na.rm = TRUE),
-      est_min    = min(est, na.rm = TRUE),
-      est_max    = max(est, na.rm = TRUE),
-
-      .groups = "drop"
-    )
-}
-
-# Overall
-ese_results <- compute_ESE_metrics(all_df_gamma, group_vars = character(0))
-fn_save_results(ese_results)
-
-# ---- ese_by_treatment: ----
-ese_by_treatment <- 
-  group_by(Treatment) |>
-  summarise(
-    n_scen = n(),   # should be 27 for each treatment
-
-    # --- ESE summaries across 27 scenarios ---
-    mean_ese   = mean(ese),
-    median_ese = median(ese),
-    sd_ese     = sd(ese),
-    mad_ese    = mad(ese),
-    min_ese    = min(ese),
-    max_ese    = max(ese),
-    
-     # RMSE of model SE (avgd across 27 scenarios)
-    mean_rmse_se = mean(rmse_se, na.rm = TRUE),
-    sd_rmse_se   = sd(rmse_se, na.rm = TRUE),
-    min_rmse_se  = min(rmse_se, na.rm = TRUE),
-    max_rmse_se  = max(rmse_se, na.rm = TRUE),
-
-    # --- Morris calibration metrics across 27 scenarios ---
-    
-    mean_ratio_modse_emp = mean(ratio_modse_emp),
-    # ratio: avg ModSE/EmpSE; close to 1 = well calibrated
-    # ratio: avg ModSE/EmpSE; <1 = underest → undercoverage
-      # if close to 1.0 across treatments, model SEs are well-calibrated. Values below 1 mean model is underestimating variability > CIs too narrow > undercoverage (links to RQ3)
-    
-    mean_rel_error_modse = mean(rel_error_modse),
-    # % avg error: negative = model underestimates SE → CIs too narrow → undercoverage (RQ3 link)
-    # % by which model SE misses EmpSE on average: e.g. 5% means model SE is 5% too small on average. Neg values directly explain undercoverage in RQ3
-    
-    sd_rel_error_modse   = sd(rel_error_modse),   
-    # consistency of miscalibration
-    
-    n_scen_underest      = sum(ratio_modse_emp < 1),
-    # how many of 27 scenarios have ModSE < ESE (underestimation)
-    prop_scen_underest   = mean(ratio_modse_emp < 1),
-
-    # --- Majority-underestimation flag ---
-    # "in how many scenarios did the model underestimate SE in >50% of reps?"
-    n_scen_under_majority  = sum(under_majority_se),
-    prop_scen_under_majority = mean(under_majority_se),
-
-    .groups = "drop"
-  )
-
-fn_save_results(ese_by_treatment)
-
-```    
-
 ```{r ese_plots}
-# --- Step 0: build scenario_short ---
-prep_plot_ese <- ese_full |>
+# Attach scenario IDs and tiers
+ese_plot_data <- ese_full |>
+  left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) |>
   mutate(
-    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
-  )
-
-# --- Step 1: order scenarios by frequency of ESE > 0.25 across all treatments ---
-scenario_order_ese <- prep_plot_ese |>
-  group_by(scenario_short) |>
-  summarise(n_large_ese = sum(ese > 0.25, na.rm = TRUE), .groups = "drop") |>
-  arrange(desc(n_large_ese)) |>
-  pull(scenario_short)
-
-# --- Step 2: order treatments by frequency of ESE > 0.25 (worst to best) ---
-treatment_order_ese <- prep_plot_ese |>
-  group_by(Treatment) |>
-  summarise(n_large_ese = sum(ese > 0.25, na.rm = TRUE), .groups = "drop") |>
-  arrange(desc(n_large_ese)) |>
-  pull(Treatment)
-
-# --- Step 3: apply ordering and ESE tiers ---
-prep_plot_ese_ordered <- prep_plot_ese |>
-  mutate(
-    scenario_short = factor(scenario_short, levels = scenario_order_ese),
-    Treatment  = factor(Treatment,  levels = treatment_order_ese),
-    ese_tier = case_when(
+    scenario_id = factor(scenario_id, levels = scenario_id_levels),
+    Treatment   = factor(Treatment,   levels = treatment_order_3row),
+    ese_tier    = case_when(
       ese > 0.50 ~ ">0.50",
       ese > 0.25 ~ ">0.25",
-      TRUE       ~ "≤0.25"
+      TRUE       ~ "<=0.25"
     ),
-    ese_tier = factor(ese_tier, levels = c("≤0.25", ">0.25", ">0.50"))
+    ese_tier = factor(ese_tier, levels = c("<=0.25", ">0.25", ">0.50"))
   )
 
-ese_y_min <- min(prep_plot_ese_ordered$ese, na.rm = TRUE)
-ese_y_max <- max(prep_plot_ese_ordered$ese, na.rm = TRUE)
+ese_colors <- c("<=0.25" = "steelblue", ">0.25" = "orange", ">0.50" = "red")
+ese_y_lims <- c(0, max(ese_plot_data$ese, na.rm = TRUE) * 1.05)
 
-# --- Step 4: plot ---
-plot_ese_facet <- prep_plot_ese_ordered |>
-  ggplot(aes(x = scenario_short, y = ese)) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
-  geom_segment(
-    aes(x = scenario_short, xend = scenario_short, y = 0, yend = ese),
-    linewidth = 0.5, color = "grey60"
-  ) +
-  geom_point(
-    aes(color = ese_tier),
-    size = 2
-  ) +
-  scale_color_manual(
-    name   = "ESE threshold",
-    values = c(
-      "≤0.25" = "steelblue",
-      ">0.25" = "orange",
-      ">0.50" = "red"
-    )
-  ) +
-  scale_y_continuous(limits = c(ese_y_min, ese_y_max)) +
-  facet_wrap(
-    ~ Treatment, nrow = 2,
-    labeller = labeller(Treatment = label_wrap_gen(width = 15))
-  ) +
-  labs(
-    title    = "Gamma Interaction: Scenario-Level Empirical SE by Treatment",
-    subtitle = "Scenarios ordered by frequency of ESE > 0.25; treatments ordered worst to best (left to right, top to bottom)",
-    x        = NULL,
-    y        = "Empirical SE"
-  ) +
-  theme_minimal(base_size = 10) +
-  theme(
-    panel.grid.major.x  = element_blank(),
-    panel.grid.minor    = element_blank(),
-    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
-    strip.text          = element_text(face = "bold", size = 9),
-    legend.position     = "bottom",
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot"
+make_ese <- function(trt, show_x, show_y) {
+  make_lolly_panel(
+    data        = ese_plot_data |> dplyr::filter(Treatment == trt),
+    yvar        = ese,
+    yvar2       = se_model_mean,   # grey open circles = mean model SE
+    tier_var    = ese_tier,
+    y_limits    = ese_y_lims,
+    tier_colors = ese_colors,
+    tier_name   = "ESE threshold",
+    panel_title = trt,
+    show_x_axis = show_x,
+    show_y_axis = show_y,
+    y_label     = "Empirical SE"
   )
+}
 
-plot_ese_facet
-ggsave(here::here(paste0("figures/gamma_ese_lollipop_facet_", dt, ".png")),
-       plot_ese_facet, width = 16, height = 8, dpi = 300)
+p_e1 <- make_ese("No treatment",                show_x = FALSE, show_y = TRUE)
+p_e2 <- make_ese("Mean-preserved top-coding",   show_x = FALSE, show_y = TRUE)
+p_e3 <- make_ese("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
+p_e4 <- make_ese("Top-coding",                  show_x = TRUE,  show_y = TRUE)
+p_e5 <- make_ese("Truncation",                  show_x = TRUE,  show_y = FALSE)
+
+tmp_ese <- p_e1 +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 9),
+        legend.text  = element_text(size = 9))
+shared_ese_legend <- gtable::gtable_filter(
+  ggplot2::ggplotGrob(tmp_ese), "guide-box"
+)
+
+ese_patch <- (
+    p_e1 + plot_spacer() +
+    p_e2 + p_e3 +
+    p_e4 + p_e5
+  ) +
+  plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
+
+ese_title    <- "Gamma Interaction: Scenario-Level Empirical SE by Treatment"
+ese_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Filled dots = empirical SE (coloured by threshold); open grey circles = mean model SE."
+
+x_label_ese <- cowplot::ggdraw() +
+  cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
+
+plot_ese_3row <- cowplot::plot_grid(
+  cowplot::plot_grid(
+    cowplot::ggdraw() + cowplot::draw_label(ese_title,    fontface = "bold", size = 13, hjust = 0.5),
+    cowplot::ggdraw() + cowplot::draw_label(ese_subtitle, size = 10, colour = "grey40", hjust = 0.5),
+    ncol = 1, rel_heights = c(0.6, 0.4)
+  ),
+  ese_patch,
+  cowplot::plot_grid(x_label_ese, shared_ese_legend,
+                     ncol = 1, rel_heights = c(0.35, 0.65)),
+  ncol = 1, rel_heights = c(0.10, 1, 0.15)
+)
+
+plot_ese_3row
+
+ggsave(
+  here::here(paste0("figures/gamma_ese_lollipop_3row_", dt, ".png")),
+  plot_ese_3row, width = 13, height = 13, dpi = 300
+)
 
 ```  
 
