@@ -419,15 +419,20 @@ scenario_summary |>
 
 ```{r lolly1}
 
-prep_plot_bias_over_under <- summ_gamma |>
+prep_plot_bias_over_under <- all_df_gamma |>
+  group_by(Treatment, N, Proportion, Magnitude) |> 
+  summarise(
+    bias = mean(bias, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
   left_join(
     tbl_bias_UnderOver_scen,
     by = c("Treatment", "N", "Proportion", "Magnitude")
   ) |>
   mutate(
-    scenario = glue::glue("p={prop_extreme}, n={nobs}, m={magnitude_level}")
+    scenario = glue::glue("p={Proportion} n={N} m={Magnitude}")
   ) |>
-  arrange(nobs, prop_extreme, magnitude_level, treatment) |>
+  arrange(N, Proportion, Magnitude, Treatment) |>
   mutate(
     scenario = factor(scenario, levels = rev(unique(scenario)))
   )
@@ -510,7 +515,7 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet_", dt, ".png")),
 # --- Step 0: rebuild scenario_short as single-line FIRST ---
 prep_plot_bias_over_under <- prep_plot_bias_over_under |>
   mutate(
-    scenario_short = glue::glue("p={prop_extreme} n={nobs} m={magnitude_level}")
+    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
   )
 
 # --- Step 1: order scenarios by frequency of |bias| > 0.02 across all treatments ---
@@ -631,10 +636,10 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 # Treat magnitude level as numeric for trend fitting
 
 plot_trends <- ggplot(
-  summ_gamma,
+  tbl_bias_scen,
   aes(
     x = Magnitude,
-    y = bias,
+    y = mean_bias,
     color = Treatment
   )
 ) +
@@ -666,6 +671,7 @@ plot_trends <- ggplot(
     x = "Magnitude level",
     y = "Bias"
   ) +
+  guides(color = guide_legend(nrow=2))+
   theme_minimal() +
   theme(legend.position = "bottom",
         legend.title = element_text(face = "bold"))
@@ -675,14 +681,56 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
        plot_trends, width = 11, height = 7, dpi = 300)
 
 
+```  
+
+### plot_est_dist
+
+```{r}
+plot_est_dist2 <- all_df_gamma |>
+  mutate(Magnitude = factor(Magnitude)) |>
+  ggplot(aes(x = est, y = Treatment)) +
+  geom_jitter(height = 0.2, size = 0.3, alpha = 0.2, color = "steelblue") +
+  stat_summary(
+    fun = mean, geom = "point", shape = "|",
+    size = 5, color = "goldenrod"
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  facet_grid(N + Magnitude ~ Proportion,
+             labeller = labeller(
+               N          = function(x) paste0("N=", x),
+               Proportion = function(x) paste0("Prop=", x),
+               Magnitude  = function(x) paste0("Mag=", x)
+             )) +
+  labs(
+    title    = "Distribution of Gamma Interaction Estimates by Treatment and Scenario",
+    subtitle = "Each point = one replication; gold bar = mean; dashed line = true value (0)",
+    x        = "Estimate",
+    y        = "Treatment"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text          = element_text(face = "bold", size = 7),
+    legend.position     = "none"
+  )
+
+plot_est_dist2
+
+ggsave(
+  here::here(paste0("figures/gamma_est_distribution_", dt, ".png")),
+  plot_est_dist, width = 14, height = 20, dpi = 300
+)
 ```
+
+
 
 ## RQ2: Empirical SE  
 
-```{r}
-# ============================================================
+```{r ESE}
+
 # compute_ESE_metrics: flexible grouping, always from all_df_gamma
-# ============================================================
+
 compute_ESE_metrics <- function(
     group_vars = c(
       "Treatment", "N", "Proportion", "Magnitude")) {
@@ -709,9 +757,9 @@ compute_ESE_metrics <- function(
     )
 }
 
-# ============================================================
+
 # Three direct calls on all_df_gamma
-# ============================================================
+
 
 # 1 row: overall
 ese_overall      <- compute_ESE_metrics(group_vars = character(0))
@@ -723,11 +771,11 @@ ese_by_treatment <- compute_ESE_metrics(group_vars = "Treatment")
 ese_full         <- compute_ESE_metrics(
   group_vars = c("Treatment", "N","Proportion", "Magnitude"))
 
-# ============================================================
+
 # Descriptives of the 27 scenario-level ESEs per treatment
 # Requires ese_full because you need 27 ESE values per treatment to summarise
 # This is a SEPARATE question from ese_by_treatment above
-# ============================================================
+
 ese_by_treatment_scen_descr <- ese_full |>
   group_by(Treatment) |>
   summarise(
@@ -755,9 +803,8 @@ ese_by_treatment_scen_descr <- ese_full |>
     .groups = "drop"
   )
 
-# ============================================================
+
 # Save all
-# ============================================================
 fn_save_results(ese_overall)
 fn_save_results(ese_by_treatment)
 fn_save_results(ese_full)
@@ -767,7 +814,7 @@ fn_save_results(ese_by_treatment_scen_descr)
 
 
 
-```{r descr_empse}
+```{r descr_empse, eval=FALSE, include=FALSE}
 
 compute_ESE_metrics <- function(df, group_vars = c("Treatment","N","Proportion","Magnitude")) {
   
@@ -776,8 +823,8 @@ compute_ESE_metrics <- function(df, group_vars = c("Treatment","N","Proportion",
     summarise(
 
       # --- Core ESE (one value per scenario-treatment cell) ---
-      ese             = sd(est, na.rm = TRUE),
-      mcse_ese        = sd(est, na.rm = TRUE) / sqrt(n()),  # MC uncertainty of ESE itself
+      ese      = sd(est, na.rm = TRUE),
+      mcse_ese = sd(est, na.rm = TRUE) / sqrt(n()),  # MC uncertainty of ESE itself
 
       # --- Model SE summaries (averaged across reps in cell) ---
       se_model_mean   = mean(se, na.rm = TRUE),
@@ -863,7 +910,7 @@ fn_save_results(ese_by_treatment)
 
 ```{r ese_plots}
 # --- Step 0: build scenario_short ---
-prep_plot_ese <- ese_results |>
+prep_plot_ese <- ese_full |>
   mutate(
     scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
   )
@@ -1029,6 +1076,61 @@ janitor::tabyl(tab_cov_scenario, Treatment, meets_95) |>
  #                  Truncation 74.1% (20) 25.9%  (7)
 ```
 
+### Zip plot coverage  
+```{r}
+zip_data <- all_df_gamma |>
+  filter(!is.na(est), !is.na(se)) |>
+  mutate(
+    z        = (est - true) / se,
+    abs_z    = abs(z),
+    ci_lower = est - 1.96 * se,
+    ci_upper = est + 1.96 * se
+  ) |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
+  arrange(abs_z) |>
+  mutate(frac_centile = row_number() / n() * 100) |>
+  ungroup() |>
+  mutate(cover_label = if_else(cover_ind == 1, "Covers", "Non-coverer"))
+
+# Pick one scenario to demonstrate (e.g. worst coverage scenario)
+# or loop over treatments as Morris does over methods
+zip_plot <- zip_data |>
+  filter(N == "5,000", Proportion == "0.10", Magnitude == 3) |>
+  ggplot(aes(y = frac_centile, color = cover_label)) +
+  geom_segment(aes(x = ci_lower, xend = ci_upper,
+                   yend = frac_centile),
+               alpha = 0.3, linewidth = 0.2) +
+  geom_hline(yintercept = 95, linetype = "dashed", color = "goldenrod") +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.4) +
+  scale_color_manual(
+    values = c("Covers" = "steelblue", "Non-coverer" = "#9b59b6"),
+    name = NULL
+  ) +
+  facet_wrap(~ Treatment, nrow = 1,
+             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
+  labs(
+    title = "Zip Plot: 95% CI Coverage by Treatment",
+    subtitle = "Scenario: N=5,000, Prop=0.10, Magnitude=3 | Gold line = nominal 95%",
+    x = "95% Confidence Interval",
+    y = "Fractional centile of |z|"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 8),
+    legend.position = "bottom"
+  )
+
+zip_plot
+
+
+ggsave(
+  here::here(paste0("figures/gamma_zipplot_", dt, ".png")),
+  zip_plot, width = 16, height = 6, dpi = 300
+)
+
+```
 
 
 
@@ -1178,6 +1280,80 @@ ggsave(here::here(paste0("figures/gamma_coverage_heat2_", dt, ".png")),
        plot_cov_heat2, width = 13, height = 10, dpi = 300)
 ```   
 
+```{r}
+# Build long-format performance table across treatments
+perf_long <- cov_by_scenario |>
+  left_join(
+    all_df_gamma |>
+      group_by(Treatment, N, Proportion, Magnitude) |>
+      summarise(
+        bias   = mean(bias, na.rm = TRUE),
+        emp_se = sd(est, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("Treatment", "N", "Proportion", "Magnitude")
+  ) |>
+  pivot_longer(
+    cols = c(bias, emp_se, coverage),
+    names_to = "measure",
+    values_to = "value"
+  ) |>
+  mutate(
+    measure = factor(measure,
+                     levels = c("bias", "emp_se", "coverage"),
+                     labels = c("Bias", "Empirical SE", "Coverage")),
+    ref_line = case_when(
+      measure == "Bias"         ~ 0,
+      measure == "Coverage"     ~ 0.95,
+      measure == "Empirical SE" ~ NA_real_
+    )
+  )
+
+lollipop_perf <- perf_long |>
+  filter(N == "5,000") |>
+  ggplot(aes(x = value, y = Treatment, color = Treatment)) +
+  geom_vline(aes(xintercept = ref_line), linetype = "dashed",
+             color = "grey40", na.rm = TRUE) +
+  geom_segment(aes(x = ref_line, xend = value,
+                   y = Treatment, yend = Treatment),
+               na.rm = TRUE, linewidth = 0.6) +
+  geom_point(size = 2) +
+  facet_grid(measure ~ Proportion + Magnitude,
+             scales = "free_x",
+             labeller = labeller(
+               Proportion = function(x) paste0("Prop=", x),
+               Magnitude  = function(x) paste0("Mag=", x),
+               measure    = label_value
+             )) +
+  scale_y_discrete(limits = rev(c(
+  "No treatment",
+  "Top-coding",
+  "Mean-preserved top-coding",
+  "Median-preserved top-coding",
+  "Truncation"
+))) +
+  labs(
+    title    = "Performance Measures by Treatment: N=5,000",
+    subtitle = "Rows = performance measure; dashed line = reference value (0 for bias, 0.95 for coverage)",
+    x        = NULL,
+    y        = NULL
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 7),
+    legend.position = "none",
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)
+  )
+
+lollipop_perf
+
+ggsave(
+  here::here(paste0("figures/gamma_lollipop_perf_", dt, ".png")),
+  lollipop_perf, width = 16, height = 8, dpi = 300
+)
+```
 
 
 3. Auto-generate sentences  
