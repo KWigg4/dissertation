@@ -125,22 +125,20 @@ treatment_order_3row <- c(
 # Single-panel builder shared by both bias and ESE chunks
 # yvar2: optional second numeric column (unquoted) plotted as small grey dots
 #        on top of the lollipop — used for model SE on ESE panels. (for modse)
-# Single-panel builder shared by both bias and ESE chunks.
-# yvar2: optional second numeric column (unquoted) plotted as small grey dots
-#        on top of the lollipop — used for model SE on ESE panels.
+# put crosses in front of dots so you can see them (when they're behind they're not visible)
 make_lolly_panel <- function(
     data,
-    yvar,           # unquoted: bias or ese
-    tier_var,       # unquoted: bias_tier or ese_tier
+    yvar,
+    tier_var,
     y_limits,
-    tier_colors,    # named colour vector
-    tier_name,      # legend title
+    tier_colors,
+    tier_name,
     panel_title,
-    show_x_axis,    # TRUE only for bottom-row panels
-    show_y_axis,    # TRUE only for left-column panels
+    show_x_axis,
+    show_y_axis,
     y_label = "",
-    hline = 0,      # reference line (0 for bias and ESE)
-    yvar2 = NULL    # optional: unquoted col for a second grey dot series
+    hline = 0,
+    yvar2 = NULL
 ) {
   p <- ggplot(data, aes(x = scenario_id, y = {{ yvar }})) +
     geom_hline(yintercept = hline, linetype = "dashed",
@@ -149,16 +147,16 @@ make_lolly_panel <- function(
       aes(xend = scenario_id, y = hline, yend = {{ yvar }}),
       linewidth = 0.5, color = "grey65"
     ) +
-    # Draw model SE first (behind) as a black cross, if supplied
+    # ESE colored dot FIRST (behind)
+    geom_point(aes(color = {{ tier_var }}), size = 2.2) +
+    # Model SE cross on TOP (in front), now grey instead of black
     { if (!is.null(substitute(yvar2)))
         geom_point(aes(y = {{ yvar2 }}),
                    shape = 3, size = 2.0,
-                   color = "black", stroke = 0.8)
+                   color = "grey40", stroke = 0.8)
       else
         geom_blank()
-    } +
-    # ESE colored dot on top
-    geom_point(aes(color = {{ tier_var }}), size = 2.2)
+    }
 
   p +
     scale_color_manual(name = tier_name, values = tier_colors) +
@@ -879,7 +877,6 @@ compute_ESE_metrics <- function(
 
 # Three direct calls on all_df_gamma
 
-
 # 1 row: overall
 ese_overall      <- compute_ESE_metrics(group_vars = character(0))
 
@@ -978,6 +975,7 @@ tmp_ese <- p_e1 +
   theme(legend.position = "bottom",
         legend.title = element_text(size = 9),
         legend.text  = element_text(size = 9))
+
 shared_ese_legend <- gtable::gtable_filter(
   ggplot2::ggplotGrob(tmp_ese), "guide-box"
 )
@@ -1263,20 +1261,24 @@ ggsave(
 
 2C. Coverage heatmap vs nominal 0.95  
 ```{r plot_cov_heat}
-# get actual range to set tight limits
+
 cov_min <- floor(min(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
 cov_max <- ceiling(max(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
 
+# Map 0.95 exactly to the colour breakpoint.
+# values= must be rescaled to [0,1] relative to the data range.
+rescale_95 <- (0.95 - cov_min) / (cov_max - cov_min)
+
 plot_cov_heat2 <- tab_cov_scenario %>%
+  left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) %>%
   dplyr::mutate(
-    cell = glue::glue("p={Proportion}  mag={Magnitude}  n={N}"),
-    # label: percent format, flag below-95 with asterisk
+    scenario_id = factor(scenario_id, levels = 27:1),
     cov_label = paste0(
       scales::number(coverage * 100, accuracy = 0.1), "%",
       ifelse(coverage < 0.95, "*", "")
     )
   ) %>%
-  ggplot(aes(x = Treatment, y = cell, fill = coverage)) +
+  ggplot(aes(x = Treatment, y = scenario_id, fill = coverage)) +
   geom_tile(color = "white", linewidth = 0.8) +
   geom_text(
     aes(
@@ -1289,20 +1291,26 @@ plot_cov_heat2 <- tab_cov_scenario %>%
     values = c("light" = "grey20", "dark" = "grey20"),
     guide  = "none"
   ) +
-  scale_fill_gradient2(
-    low      = "#C7372F",
-    mid      = "white",
-    high     = "darkgreen",
-    midpoint = 0.95,
-    limits   = c(cov_min, cov_max),   # tight limits = full color range used
-    labels   = scales::percent_format(accuracy = 1)
+  scale_fill_gradientn(
+    colours = c("#C7372F", "#f7c4c2", "#f7c4c2", "#a8d5a2", "#2ca02c"),
+    values  = scales::rescale(
+      c(cov_min,
+        0.95 - (0.95 - cov_min) * 0.5,   # halfway between min and 0.95 = light red
+        0.9499,                            # just below 0.95 = still light red
+        0.95,                              # exactly 0.95 = light green (>=95 is green)
+        cov_max),
+      to = c(0, 1),
+      from = c(cov_min, cov_max)
+    ),
+    limits = c(cov_min, cov_max),
+    labels = scales::percent_format(accuracy = 1)
   ) +
   scale_x_discrete(labels = label_wrap_gen(width = 12)) +
   labs(
     title    = "Gamma Interaction: Coverage by Treatment and Scenario",
-    subtitle = "Green ≥ 95% (nominal); red = undercoverage; * = below 95%; values are coverage rates",
+    subtitle = "Green >= 95% (nominal); red = undercoverage; * = below 95%",
     x        = NULL,
-    y        = "Scenario",
+    y        = "Scenario ID",
     fill     = "Coverage"
   ) +
   theme_minimal(base_size = 10) +
@@ -1316,8 +1324,12 @@ plot_cov_heat2 <- tab_cov_scenario %>%
   )
 
 plot_cov_heat2
-ggsave(here::here(paste0("figures/gamma_coverage_heat2_", dt, ".png")),
-       plot_cov_heat2, width = 13, height = 10, dpi = 300)
+
+# Landscape dimensions (width > height)
+ggsave(
+  here::here(paste0("figures/gamma_coverage_heat2_", dt, ".png")),
+  plot_cov_heat2, width = 16, height = 10, dpi = 300
+)
 ```   
 
 ```{r}
