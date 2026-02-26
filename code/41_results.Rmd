@@ -628,90 +628,8 @@ ggsave(
 ```
 
 
-```{r lolli3}
-# --- Step 0: rebuild scenario_short as single-line FIRST ---
-prep_plot_bias_over_under <- prep_plot_bias_over_under |>
-  mutate(
-    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
-  )
-
-# --- Step 1: order scenarios by frequency of |bias| > 0.02 across all treatments ---
-scenario_order <- prep_plot_bias_over_under |>
-  group_by(scenario_short) |>
-  summarise(n_large_bias = sum(abs(bias) > 0.02, na.rm = TRUE), .groups = "drop") |>
-  arrange(desc(n_large_bias)) |>
-  pull(scenario_short)
-
-# --- Step 2: order treatments by frequency of |bias| > 0.04 (worst to best) ---
-treatment_order <- prep_plot_bias_over_under |>
-  group_by(Treatment) |>
-  summarise(n_large_bias = sum(abs(bias) > 0.04, na.rm = TRUE), .groups = "drop") |>
-  arrange(desc(n_large_bias)) |>
-  pull(Treatment)
-
-# --- Step 3: apply ordering and bias tiers ---
-prep_plot_bias_ordered <- prep_plot_bias_over_under |>
-  mutate(
-    scenario_short = factor(scenario_short, levels = scenario_order),
-    Treatment  = factor(Treatment,  levels = treatment_order),
-    bias_tier = case_when(
-      abs(bias) > 0.05 ~ ">|0.05|",
-      abs(bias) > 0.04 ~ ">|0.04|",
-      TRUE             ~ "≤|0.04|"
-    ),
-    bias_tier = factor(bias_tier, levels = c("≤|0.04|", ">|0.04|", ">|0.05|"))
-  )
-
-# --- Step 4: plot ---
-plot_bias_facet4 <- prep_plot_bias_ordered |>
-  ggplot(aes(x = scenario_short, y = bias)) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
-  geom_segment(
-    aes(x = scenario_short, xend = scenario_short, y = 0, yend = bias),
-    linewidth = 0.5, color = "grey60"
-  ) +
-  geom_point(
-    aes(color = bias_tier),
-    size = 2
-  ) +
-  scale_color_manual(
-    name   = "|Bias| threshold",
-    values = c(
-      "≤|0.04|" = "steelblue",
-      ">|0.04|" = "orange",
-      ">|0.05|" = "red"
-    )
-  ) +
-  scale_y_continuous(limits = c(x_min, x_max)) +
-  facet_wrap(
-    ~ Treatment, nrow = 2,
-    labeller = labeller(Treatment = label_wrap_gen(width = 15))
-  ) +
-  labs(
-    title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
-    subtitle = "Scenarios ordered by frequency of |bias| > 0.02; treatments ordered worst to best (left to right, top to bottom)",
-    x        = NULL,
-    y        = "Bias"
-  ) +
-  theme_minimal(base_size = 10) +
-  theme(
-    panel.grid.major.x  = element_blank(),
-    panel.grid.minor    = element_blank(),
-    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
-    strip.text          = element_text(face = "bold", size = 9),
-    legend.position     = "bottom",
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot"
-  )
-
-plot_bias_facet4
-
-ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet4_", dt, ".png")),
-       plot_bias_facet4, width = 14, height = 9, dpi = 300)
-```
-
 ```{r plots_dir}
-# did from all_df_gamma and summ_gamma and got exact same plot
+
 prep_plot_bias_lollipop <- all_df_gamma %>%
   group_by(Treatment) %>%
   summarise(
@@ -734,8 +652,8 @@ plot_bias_lollipop <- prep_plot_bias_lollipop |>
   labs(
     title = "Gamma Interaction: Average Scenario-Mean Bias by Treatment",
     subtitle = "Positive = overestimation; Negative = underestimation",
-    x = NULL, y = "Average of scenario means (bias)"
-  ) +
+    x = NULL, 
+    y = stringr::str_wrap("Average of scenario means (bias)"), width=20) +
   theme_minimal() +
   theme(legend.position = "top",
         axis.text.x = element_text(size=9, lineheight=0.9))
