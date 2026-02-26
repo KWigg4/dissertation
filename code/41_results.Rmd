@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = FALSE)
 ```{r pkgs}
 pacman::p_load(
   broom,
+  cowplot,
   dplyr,
   effectsize,
   forcats,
@@ -25,6 +26,7 @@ pacman::p_load(
   gt,
   here,
   lubridate,
+  patchwork,
   purrr,
   readr,
   scales,
@@ -91,7 +93,76 @@ all_df_att <- fn_readRDS(all_df_att) |> # 67,371
          "Proportion"=prop_extreme_fct,
          "Magnitude" = magnitude_fct)
 
-```   
+```    
+
+```{r scenario_key}
+# Build the canonical 27-row scenario key (nobs → prop → magnitude)
+scenario_key <- all_df_gamma |>
+  distinct(N, Proportion, Magnitude) |>
+  # recover numeric versions for sorting
+  mutate(
+    nobs_num  = as.numeric(gsub(",", "", as.character(N))),
+    prop_num  = as.numeric(as.character(Proportion)),
+    mag_num   = as.numeric(as.character(Magnitude))
+  ) |>
+  arrange(nobs_num, prop_num, mag_num) |>
+  mutate(scenario_id = row_number()) |>
+  select(scenario_id, N, Proportion, Magnitude)
+
+# Factor levels for scenario_id (1 → 27, left to right on x-axis)
+scenario_id_levels <- as.character(1:27)
+
+# Fixed treatment order (position in the 3-row grid) for lollis
+treatment_order_3row <- c(
+  "No treatment",
+  "Mean-preserved top-coding", "Median-preserved top-coding",
+  "Top-coding", "Truncation"
+)
+```    
+
+```{r make_lolli_panel}
+
+# Single-panel builder shared by both bias and ESE chunks
+
+```
+
+
+```{r scenario_key_table}
+
+scenario_key_gt <- scenario_key |>
+  gt() |>
+  tab_header(
+    title    = "Scenario Key: Bias and ESE Lollipop Plots",
+    subtitle = "Scenarios ordered by sample size, proportion of extremes, then magnitude level"
+  ) |>
+  cols_label(
+    scenario_id = "ID",
+    N           = "Sample Size (N)",
+    Proportion  = "Prop. Extreme",
+    Magnitude   = "Magnitude Level"
+  ) |>
+  tab_style(
+    style     = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) |>
+  tab_footnote(
+    footnote  = "Magnitude: 1 = $50K–$1M; 2 = $50K–$2M; 3 = $50K–$3M",
+    locations = cells_column_labels(columns = Magnitude)
+  ) |>
+  tab_options(data_row.padding = px(2))
+
+scenario_key_gt
+
+gtsave(scenario_key_gt,
+       here::here(paste0("results/scenario_key_table_", dt, ".rtf")))
+gtsave(scenario_key_gt,
+       here::here(paste0("results/scenario_key_table_", dt, ".html")))
+write.csv(scenario_key,
+          here::here(paste0("results/scenario_key_", dt, ".csv")),
+          row.names = FALSE)
+```
+
+
 
 ```{r fails}
 failure_log <- read.csv(here::here("results/failure_log_2026-02-21.csv")) %>%
@@ -118,38 +189,6 @@ failure_log <- read.csv(here::here("results/failure_log_2026-02-21.csv")) %>%
 ```
 
 
-```{r get_summ_grid, eval=FALSE}
-
-# Get design id and n_design from summ_gamma 
-design_elements <- fn_readRDS(summ_gamma) |> 
-  select(
-    nobs, prop_extreme, magnitude_level, treatment, design_id) |> 
-  # won't join if you don't change this back to character.
-  mutate(treatment=as.character(treatment))
-  
-summ_grid  <- fn_readRDS(summ_grid) |> 
-  left_join(
-    design_elements, 
-    by = c("treatment", "nobs", "prop_extreme", "magnitude_level")) |> 
-  select(design_id, model, 
-         nobs, N, 
-         prop_extreme, Proportion,
-         magnitude_level, Magnitude,
-         treatment, Treatment,
-         everything()) |> 
-  mutate(
-    scen_id = paste0(
-      "prop=", Proportion, " | mag=", Magnitude, " | n=", N),
-  )
-
-summ_gamma <- summ_grid |> 
-  filter(model == "gamma") 
-
-# Make your own for this (later) because you need abs_bias from all_df_att
-# summ_att <- summ_grid |> 
-#   filter(model=="ATT")
-  
-```  
 
 ## Failures  
 
@@ -354,30 +393,6 @@ tbl_bias_UnderOver_scen |>
   gt::gtsave(
     here::here("results/tbl_over_under_scen.rtf")
 )
-
-# Aggregate to treatment-level “consistency” table
-# tab_consistency <- summ_gamma |>
-#   left_join( 
-#     tbl_bias_UnderOver_scen,
-#     by = c("Treatment", "N", "Proportion", "Magnitude")
-#     ) |>
-#   group_by(Treatment) %>%
-#   summarise(
-#     n_scen = dplyr::n(),
-#     
-#     total_under = sum(n_under, na.rm = TRUE), # total reps underestimating 
-#     total_over = sum(n_over, na.rm = TRUE), # total reps overestimating 
-#     total_reps = sum(n_scen, na.rm = TRUE), # total reps across scenarios 
-#     
-#     avg_under_per_scen = mean(n_under, na.rm = TRUE), 
-#     avg_over_per_scen = mean(n_over, na.rm = TRUE),
-#     
-#     share_scen_under = mean(bias < 0, na.rm = TRUE),  
-#     # % scenarios with negative mean bias
-#     share_scen_over  = mean(bias > 0, na.rm = TRUE),
-#     share_scen_under_majority = mean(under_majority, na.rm = TRUE),
-#     .groups = "drop"
-#   )
 ```    
 
 ```{r bias_by_scen}
@@ -468,46 +483,90 @@ tab_27 |>
   gtsave(here::here("results/tab_27.rtf"))
 ```  
 
-```{r scenario_lolli_2}
-plot_bias_facet <- prep_plot_bias_over_under |>
-  ggplot(aes(x = bias, y = scenario)) +
-  geom_segment(
-    aes(x = 0, xend = bias, y = scenario, yend = scenario),
-    linewidth = 0.5, color = "grey60"
-  ) +
-  geom_point(
-    aes(color = abs(bias) > 0.04),
-    size = 1.8
-  ) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
-  scale_color_manual(
-    values = c(`TRUE` = "red", `FALSE` = "steelblue"),
-    labels = c("≤ 0.04", "> 0.04"),
-    name   = "|Bias|"
-  ) +
-  scale_x_continuous(limits = c(x_min, x_max)) +
-  facet_wrap(~ Treatment, nrow = 1) +
-  labs(
-    title    = "Gamma Interaction: Scenario-Level Bias by Treatment",
-    subtitle = "Red points indicate |bias| > 0.04",
-    x        = "Bias",
-    y        = "Scenario"
-  ) +
-  theme_minimal(base_size = 11) +
-  theme(
-    panel.grid.major.y  = element_blank(),
-    panel.grid.minor    = element_blank(),
-    axis.text.y         = element_text(size = 7),
-    strip.text          = element_text(face = "bold", size = 9),
-    legend.position     = "bottom",
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot"
+
+
+```{r lolli3_replace}
+
+# Attach scenario IDs and tiers
+bias_plot_data <- prep_plot_bias_over_under |>
+  left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) |>
+  mutate(
+    scenario_id = factor(scenario_id, levels = scenario_id_levels),
+    Treatment   = factor(Treatment,   levels = treatment_order_3row),
+    bias_tier   = case_when(
+      abs(bias) > 0.05 ~ ">|0.05|",
+      abs(bias) > 0.04 ~ ">|0.04|",
+      TRUE             ~ "<=|0.04|"
+    ),
+    bias_tier = factor(bias_tier, levels = c("<=|0.04|", ">|0.04|", ">|0.05|"))
   )
 
-plot_bias_facet
+bias_colors <- c("<=|0.04|" = "steelblue", ">|0.04|" = "orange", ">|0.05|" = "red")
+bias_y_lims <- c(x_min, x_max)   # x_min / x_max defined in lolly1 chunk
 
-ggsave(here::here(paste0("figures/gamma_bias_lollipop_facet_", dt, ".png")),
-       plot_bias_facet, width = 16, height = 8, dpi = 300)
+# Convenience wrapper
+make_bias <- function(trt, show_x, show_y) {
+  make_lolly_panel(
+    data        = bias_plot_data |> dplyr::filter(Treatment == trt),
+    yvar        = bias,
+    tier_var    = bias_tier,
+    y_limits    = bias_y_lims,
+    tier_colors = bias_colors,
+    tier_name   = "|Bias| threshold",
+    panel_title = trt,
+    show_x_axis = show_x,
+    show_y_axis = show_y,
+    y_label     = "Mean Bias"
+  )
+}
+
+# 5 panels: x-axis only on bottom row, y-axis only on left column
+p_b1 <- make_bias("No treatment",                show_x = FALSE, show_y = TRUE)
+p_b2 <- make_bias("Mean-preserved top-coding",   show_x = FALSE, show_y = TRUE)
+p_b3 <- make_bias("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
+p_b4 <- make_bias("Top-coding",                  show_x = TRUE,  show_y = TRUE)
+p_b5 <- make_bias("Truncation",                  show_x = TRUE,  show_y = FALSE)
+
+# Extract shared legend from a version with legend enabled
+shared_bias_legend <- (
+  p_b1 + theme(legend.position = "bottom",
+               legend.title = element_text(size = 9),
+               legend.text  = element_text(size = 9))
+) |> cowplot::get_legend()
+
+# Compose: top-right slot = plot_spacer()
+bias_patch <- (
+    p_b1 + plot_spacer() +
+    p_b2 + p_b3 +
+    p_b4 + p_b5
+  ) +
+  plot_layout(nrow = 3, ncol = 2, byrow = TRUE) +
+  plot_annotation(
+    title    = "Gamma Interaction: Scenario-Level Mean Bias by Treatment",
+    subtitle = "X-axis: scenario ID 1-27 (see companion table). Dashed line = zero bias.",
+    theme = theme(
+      plot.title    = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 10, color = "grey40")
+    )
+  )
+
+# Attach shared x-axis label and legend beneath
+x_label_bias <- cowplot::ggdraw() +
+  cowplot::draw_label("Scenario ID", fontsize = 10, hjust = 0.5)
+
+plot_bias_3row <- cowplot::plot_grid(
+  bias_patch,
+  cowplot::plot_grid(x_label_bias, shared_bias_legend,
+                     ncol = 1, rel_heights = c(0.35, 0.65)),
+  ncol = 1, rel_heights = c(1, 0.07)
+)
+
+plot_bias_3row
+
+ggsave(
+  here::here(paste0("figures/gamma_bias_lollipop_3row_", dt, ".png")),
+  plot_bias_3row, width = 13, height = 13, dpi = 300
+)
 ```
 
 
