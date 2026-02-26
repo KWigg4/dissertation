@@ -125,6 +125,9 @@ treatment_order_3row <- c(
 # Single-panel builder shared by both bias and ESE chunks
 # yvar2: optional second numeric column (unquoted) plotted as small grey dots
 #        on top of the lollipop — used for model SE on ESE panels. (for modse)
+# Single-panel builder shared by both bias and ESE chunks.
+# yvar2: optional second numeric column (unquoted) plotted as small grey dots
+#        on top of the lollipop — used for model SE on ESE panels.
 make_lolly_panel <- function(
     data,
     yvar,           # unquoted: bias or ese
@@ -146,14 +149,16 @@ make_lolly_panel <- function(
       aes(xend = scenario_id, y = hline, yend = {{ yvar }}),
       linewidth = 0.5, color = "grey65"
     ) +
+    # Draw model SE first (behind) as a black cross, if supplied
+    { if (!is.null(substitute(yvar2)))
+        geom_point(aes(y = {{ yvar2 }}),
+                   shape = 3, size = 2.0,
+                   color = "black", stroke = 0.8)
+      else
+        geom_blank()
+    } +
+    # ESE colored dot on top
     geom_point(aes(color = {{ tier_var }}), size = 2.2)
-
-  # Add second series (model SE) as grey dots if supplied
-  if (!is.null(substitute(yvar2))) {
-    p <- p + geom_point(aes(y = {{ yvar2 }}),
-                        shape = 1, size = 1.8,
-                        color = "grey40", alpha = 0.7)
-  }
 
   p +
     scale_color_manual(name = tier_name, values = tier_colors) +
@@ -929,6 +934,7 @@ fn_save_results(ese_by_treatment_scen_descr)
 
 
 ```{r ese_plots}
+
 # Attach scenario IDs and tiers
 ese_plot_data <- ese_full |>
   left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) |>
@@ -984,7 +990,7 @@ ese_patch <- (
   plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
 
 ese_title    <- "Gamma Interaction: Scenario-Level Empirical SE by Treatment"
-ese_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Filled dots = empirical SE (coloured by threshold); open grey circles = mean model SE."
+ese_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Filled dots = empirical SE (coloured by threshold); black crosses = mean model SE."
 
 x_label_ese <- cowplot::ggdraw() +
   cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
@@ -1044,7 +1050,7 @@ cov_by_scenario <- all_df_gamma |>
   )
 
 # All 135 scenarios with pass/fail flag
-tab_cov_scenarios <- cov_by_scenario |>
+tab_cov_scenario <- cov_by_scenario |>
   mutate(
     meets_95 = coverage >= 0.95
   )
@@ -1070,7 +1076,7 @@ tab_cov_by_treatment_scen <- cov_by_scenario |>
 fn_save_results(tab_cov_overall)
 fn_save_results(tab_cov_by_treatment_reps)
 fn_save_results(cov_by_scenario)
-fn_save_results(tab_cov_scenarios)
+fn_save_results(tab_cov_scenario)
 fn_save_results(tab_cov_by_treatment_scen)
 ```  
 
@@ -1150,93 +1156,110 @@ ggsave(
 ```
 
 
+```{r}
 
-```{r cov_lolli_plot}
-# Step 1: Build scenario label
-prep_plot_cov <- cov_by_scenario |>
+# Attach scenario IDs (reuses scenario_key from lolly_setup)
+cov_plot_data <- cov_by_scenario |>
+  left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) |>
   mutate(
-    scenario_short = glue::glue("p={Proportion} n={N} m={Magnitude}")
+    scenario_id = factor(scenario_id, levels = scenario_id_levels),
+    Treatment   = factor(Treatment,   levels = treatment_order_3row),
+    cov_flag    = if_else(coverage < 0.95, "Below 95%", "At/Above 95%"),
+    cov_flag    = factor(cov_flag, levels = c("At/Above 95%", "Below 95%"))
   )
 
-# Step 2: Order scenarios by mean coverage across treatments (worst to best)
-scenario_order_cov <- prep_plot_cov |>
-  group_by(scenario_short) |>
-  summarise(mean_cov = mean(coverage, na.rm = TRUE), .groups = "drop") |>
-  arrange(mean_cov) |>
-  pull(scenario_short)
+cov_colors <- c("At/Above 95%" = "#2ca02c", "Below 95%" = "#d62728")
+cov_y_lower <- min(0.85, min(cov_plot_data$coverage, na.rm = TRUE) - 0.01)
+cov_y_lims  <- c(cov_y_lower, 1.0)
 
-# Step 3: Order treatments by number of scenarios below 0.95 (worst to best left to right)
-treatment_order_cov <- tab_cov_by_treatment_scen |>
-  arrange(desc(n_fail)) |>
-  pull(Treatment)
+# Coverage panel builder (segment runs from 0.95 to coverage, both coloured)
+make_cov_panel <- function(data, show_x_axis, show_y_axis) {
+  ggplot(data, aes(x = scenario_id, y = coverage)) +
+    geom_hline(yintercept = 0.95, linetype = "dashed",
+               color = "grey30", linewidth = 0.5) +
+    geom_segment(
+      aes(xend = scenario_id, y = 0.95, yend = coverage, color = cov_flag),
+      linewidth = 0.5
+    ) +
+    geom_point(aes(color = cov_flag), size = 2.2) +
+    scale_color_manual(name = "Coverage status", values = cov_colors) +
+    scale_y_continuous(
+      limits = cov_y_lims,
+      labels = scales::percent_format(accuracy = 1),
+      breaks = seq(0.85, 1.0, by = 0.05)
+    ) +
+    scale_x_discrete(breaks = scenario_id_levels,
+                     limits = scenario_id_levels) +
+    labs(y = if (show_y_axis) "Coverage" else "") +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid.major.x  = element_blank(),
+      panel.grid.minor    = element_blank(),
+      legend.position     = "none",
+      axis.text.x  = if (show_x_axis) element_text(size = 8) else element_blank(),
+      axis.ticks.x = if (show_x_axis) element_line() else element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = if (show_y_axis) element_text(size = 9) else element_blank(),
+      axis.text.y  = element_text(size = 8)
+    )
+}
 
-# Step 4: Apply ordering and flag
-prep_plot_cov_ordered <- prep_plot_cov |>
-  mutate(
-    scenario_short = factor(scenario_short, levels = scenario_order_cov),
-    Treatment  = factor(Treatment,  levels = treatment_order_cov),
-    cov_flag       = if_else(coverage < 0.95, "Below 95%", "At/Above 95%"),
-    cov_flag       = factor(cov_flag, levels = c("At/Above 95%", "Below 95%"))
-  )
+make_cov <- function(trt, show_x, show_y) {
+  make_cov_panel(
+    data        = cov_plot_data |> dplyr::filter(Treatment == trt),
+    show_x_axis = show_x,
+    show_y_axis = show_y
+  ) + ggtitle(trt) +
+    theme(plot.title = element_text(face = "bold", size = 10, hjust = 0.5))
+}
 
-# Step 5: Plot
-y_lower <- min(0.85, min(prep_plot_cov_ordered$coverage, na.rm = TRUE) - 0.01)
+p_c1 <- make_cov("No treatment",                show_x = FALSE, show_y = TRUE)
+p_c2 <- make_cov("Mean-preserved top-coding",   show_x = FALSE, show_y = TRUE)
+p_c3 <- make_cov("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
+p_c4 <- make_cov("Top-coding",                  show_x = TRUE,  show_y = TRUE)
+p_c5 <- make_cov("Truncation",                  show_x = TRUE,  show_y = FALSE)
 
-plot_cov_facet <- prep_plot_cov_ordered |>
-  ggplot(aes(x = scenario_short, y = coverage)) +
-  geom_hline(
-    yintercept = 0.95, linetype = "dashed",
-    color = "grey30", linewidth = 0.5
-  ) +
-  geom_segment(
-    aes(
-      x = scenario_short, xend = scenario_short,
-      y = 0.95, yend = coverage,
-      color = cov_flag
-    ),
-    linewidth = 0.5
-  ) +
-  geom_point(aes(color = cov_flag), size = 2) +
-  scale_color_manual(
-    name   = "Coverage status",
-    values = c("At/Above 95%" = "#2ca02c", "Below 95%" = "#d62728")
-  ) +
-  scale_y_continuous(
-    limits = c(y_lower, 1.0),
-    labels = scales::percent_format(accuracy = 1),
-    breaks = seq(0.85, 1.0, by = 0.05)
-  ) +
-  facet_wrap(
-    ~ Treatment, nrow = 2,
-    labeller = labeller(Treatment = label_wrap_gen(width = 15))
-  ) +
-  labs(
-    title    = "Gamma Interaction: CI Coverage by Treatment and Scenario",
-    subtitle = "Dashed line = nominal 95%; scenarios ordered worst to best; treatments ordered worst to best left to right",
-    x        = NULL,
-    y        = "Coverage"
-  ) +
-  theme_minimal(base_size = 10) +
-  theme(
-    panel.grid.major.x  = element_blank(),
-    panel.grid.minor    = element_blank(),
-    axis.text.x         = element_text(angle = 90, hjust = 1, size = 7),
-    strip.text          = element_text(face = "bold", size = 9),
-    legend.position     = "bottom",
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot"
-  )
+# Shared legend
+tmp_cov <- p_c1 +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 9),
+        legend.text  = element_text(size = 9))
+shared_cov_legend <- gtable::gtable_filter(
+  ggplot2::ggplotGrob(tmp_cov), "guide-box"
+)
 
-plot_cov_facet
+cov_patch <- (
+    p_c1 + plot_spacer() +
+    p_c2 + p_c3 +
+    p_c4 + p_c5
+  ) +
+  plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
+
+cov_title    <- "Gamma Interaction: CI Coverage by Treatment and Scenario"
+cov_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Dashed line = nominal 95%."
+
+x_label_cov <- cowplot::ggdraw() +
+  cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
+
+plot_cov_3row <- cowplot::plot_grid(
+  cowplot::plot_grid(
+    cowplot::ggdraw() + cowplot::draw_label(cov_title,    fontface = "bold", size = 13, hjust = 0.5),
+    cowplot::ggdraw() + cowplot::draw_label(cov_subtitle, size = 10, colour = "grey40", hjust = 0.5),
+    ncol = 1, rel_heights = c(0.6, 0.4)
+  ),
+  cov_patch,
+  cowplot::plot_grid(x_label_cov, shared_cov_legend,
+                     ncol = 1, rel_heights = c(0.35, 0.65)),
+  ncol = 1, rel_heights = c(0.10, 1, 0.15)
+)
+
+plot_cov_3row
 
 ggsave(
-  here::here(paste0("figures/gamma_coverage_lollipop_facet_", dt, ".png")),
-  plot_cov_facet, width = 16, height = 8, dpi = 300
+  here::here(paste0("figures/gamma_coverage_lollipop_3row_", dt, ".png")),
+  plot_cov_3row, width = 13, height = 13, dpi = 300
 )
 ```
-
-
-
 
 2C. Coverage heatmap vs nominal 0.95  
 ```{r plot_cov_heat}
@@ -1269,7 +1292,7 @@ plot_cov_heat2 <- tab_cov_scenario %>%
   scale_fill_gradient2(
     low      = "#C7372F",
     mid      = "white",
-    high     = "#2ca02c",
+    high     = "darkgreen",
     midpoint = 0.95,
     limits   = c(cov_min, cov_max),   # tight limits = full color range used
     labels   = scales::percent_format(accuracy = 1)
