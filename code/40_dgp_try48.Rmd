@@ -534,6 +534,7 @@ dat_combined <- bind_rows(
     )
   )
 
+saveRDS(dat_combined, here::here("results/example_data.RDS"))
 
 plot_boxplot_extremes <- ggplot(
   dat_combined,
@@ -725,7 +726,124 @@ ggsave(
 
 
 
+```   
+
+```{r split_hist}
+# --- Data: positive values only ---
+dat_combined_pos <- dat_combined |> filter(TOTEXPYY > 0)
+
+bulk_cut <- 50000
+
+# --- Get actual max bin height from 10% extreme right panel ---
+get_max_bin_count <- function(prop_lbl) {
+  dat <- dat_combined_pos |>
+    filter(prop_extreme_lbl == prop_lbl, TOTEXPYY > bulk_cut)
+  h <- ggplot_build(
+    ggplot(dat, aes(x = TOTEXPYY)) + geom_histogram(bins = 60)
+  )
+  max(h$data[[1]]$count, na.rm = TRUE)
+}
+
+right_max_count <- get_max_bin_count("10% Extreme")
+right_max_count  # sanity check
+
+# --- Panel builder ---
+make_hist_panel <- function(prop_lbl, col, show_x, show_y, title = NULL, y_limit = NULL) {
+  
+  fill_col <- c(
+    "1% Extreme"  = "#4E9ABE",
+    "5% Extreme"  = "#F4A261",
+    "10% Extreme" = "#E76F51"
+  )[prop_lbl]
+  
+  dat <- dat_combined_pos |> filter(prop_extreme_lbl == prop_lbl)
+  
+  if (col == "left") {
+    dat     <- dat |> filter(TOTEXPYY <= bulk_cut)
+    x_scale <- list(
+      scale_x_continuous(
+        labels = scales::dollar_format(scale = 1e-3, suffix = "K")
+      ),
+      coord_cartesian(xlim = c(0, bulk_cut))
+    )
+    x_lab <- if (show_x) "Expenditure (≤ $50K)" else NULL
+    
+  } else {
+    dat     <- dat |> filter(TOTEXPYY > bulk_cut)
+    x_scale <- list(
+      scale_x_continuous(
+        labels = scales::dollar_format(scale = 1e-6, suffix = "M")
+      )
+    )
+    x_lab <- if (show_x) "Expenditure (> $50K)" else NULL
+  }
+  
+  p <- ggplot(dat, aes(x = TOTEXPYY)) +
+    geom_histogram(
+      bins      = 60,
+      fill      = fill_col,
+      color     = "white",
+      linewidth = 0.2
+    ) +
+    x_scale +
+    scale_y_continuous(
+      labels = scales::comma,
+      limits = y_limit
+    ) +
+    labs(
+      title = title,
+      x     = x_lab,
+      y     = if (show_y) paste0(prop_lbl, "\n\nCount") else NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title         = element_text(face = "bold", size = 10, hjust = 0.5),
+      axis.title.x       = element_text(size = 9, color = "grey40"),
+      axis.title.y       = element_text(size = 9),
+      axis.text.x        = if (show_x) element_text(size = 8) else element_blank(),
+      axis.ticks.x       = if (show_x) element_line() else element_blank(),
+      panel.grid.minor   = element_blank()
+    )
+  
+  p
+}
+
+# --- Build 6 panels ---
+p_1_left   <- make_hist_panel("1% Extreme",  "left",  show_x = FALSE, show_y = TRUE,  title = "Bulk (≤ $50K)")
+p_1_right  <- make_hist_panel("1% Extreme",  "right", show_x = FALSE, show_y = FALSE, title = "Extremes (> $50K)", y_limit = c(0, right_max_count * 1.05))
+p_5_left   <- make_hist_panel("5% Extreme",  "left",  show_x = FALSE, show_y = TRUE,  title = NULL)
+p_5_right  <- make_hist_panel("5% Extreme",  "right", show_x = FALSE, show_y = FALSE, title = NULL,               y_limit = c(0, right_max_count * 1.05))
+p_10_left  <- make_hist_panel("10% Extreme", "left",  show_x = TRUE,  show_y = TRUE,  title = NULL)
+p_10_right <- make_hist_panel("10% Extreme", "right", show_x = TRUE,  show_y = FALSE, title = NULL,               y_limit = c(0, right_max_count * 1.05))
+
+# --- Compose ---
+plot_hist_sixpanel <- patchwork::wrap_plots(
+  p_1_left,  p_1_right,
+  p_5_left,  p_5_right,
+  p_10_left, p_10_right,
+  nrow = 3, ncol = 2
+)
+
+plot_hist_sixpanel <- plot_hist_sixpanel + 
+	patchwork::plot_annotation(
+  title    = "Distribution of Positive Expenditures by Proportion of Extreme Values",
+  subtitle = "Rows = proportion of extreme values (1%, 5%, 10%); Left = bulk (≤$50K); Right = extreme tail (>$50K)\nMagnitude level = 1 ($50,000–$1,000,000); n = 5,000; restricted to positive spenders",
+  caption  = "Note: Zero-expenditure observations excluded; modeled separately via logistic component.\nRight column y-axis fixed to 10% extreme condition maximum to allow direct comparison across rows."
+)
+
+plot_hist_sixpanel
+
+ggsave(
+  here::here(paste0("figures/hist_sixpanel_extremes_", dt, ".png")),
+  plot_hist_sixpanel,
+  width  = 10,
+  height = 9,
+  dpi    = 300
+)
 ```
+
+
+
 
 #Step 2: Full Monte Carlo across scenarios
 ```{r full_mc}

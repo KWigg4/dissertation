@@ -654,7 +654,9 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 ```  
 
 
-#### Jitter (4-way)     
+#### Jitter (4-way)   
+
+Decided not to keep, the next one is better.  
 
 ```{r bias_jitter}
 # --- Trend lines including n as a scenario condition ---
@@ -1336,27 +1338,6 @@ ggsave(
 ```
 
 
-3. Auto-generate sentences  
-Summarize direction, magnitude, reliability per treatment using tables above  
-```{r sentences, eval=FALSE}
-sentences <- tab_consistency %>%
-  mutate(
-    dir = ifelse(as.numeric(avg_mean_bias) < 0, "underestimated", "overestimated"),
-    abs_avg = abs(as.numeric(avg_mean_bias)),
-    txt = glue::glue(
-      "On average across {n_scen} scenarios, the {treatment} method {dir} ",
-      "the Gamma interaction by {scales::number(abs_avg, accuracy = 0.0001)}. ",
-      "Median scenario-mean bias was {med_mean_bias}. ",
-      "{scales::percent(share_scen_under, accuracy = 0.1)} of scenarios had negative mean bias, ",
-      "and {scales::percent(share_scen_under_majority, accuracy = 0.1)} showed majority underestimation. ",
-      "Mean empirical SE was {mean_emp_se}, and mean coverage was {scales::percent(mean_cov, accuracy = 0.1)}."
-    )
-  ) %>%
-  dplyr::pull(txt)
-
-cat(paste0("- ", sentences, collapse = "\n"))
-```   
-
 ## ATT descr  
 ```{r fn_att_descr}
 
@@ -1476,130 +1457,220 @@ fn_save_results(att_bias_by_scenario)
 
 ```  
 
-```{r plot_att_est_bias}
+#### lollipop  
 
-# ATT ESTIMATE: trends plot
+```{r}
+# Build ATT scenario-level summary (like prep_plot_bias_over_under) 
+prep_att_bias <- all_df_att |>
+  group_by(Treatment, N, Proportion, Magnitude) |>
+  summarise(
+    bias       = mean(bias, na.rm = TRUE),
+    under_rate = mean(est < true, na.rm = TRUE),
+    over_rate  = mean(est > true, na.rm = TRUE),
+    .groups    = "drop"
+  ) |>
+  mutate(
+    under_majority = under_rate > 0.5,
+    over_majority  = over_rate  > 0.5
+  ) 
 
-summ_att <- summ_grid |> 
-  filter(model=="ATT") |> 
-  select(-c(mean_model_se, rmse, coverage))
+# --- ATT-specific scenario key (same structure, built from all_df_att) ---
+scenario_key_att <- prep_att_bias |>
+  mutate(
+    N          = as.character(N),
+    Proportion = as.character(Proportion),
+    Magnitude  = as.character(Magnitude)
+  ) |>
+  distinct(N, Proportion, Magnitude) |>
+  mutate(
+    nobs_num = as.numeric(gsub(",", "", N)),
+    prop_num = as.numeric(Proportion),
+    mag_num  = as.numeric(Magnitude)
+  ) |>
+  arrange(nobs_num, prop_num, mag_num) |>
+  mutate(scenario_id = row_number()) |>
+  select(scenario_id, N, Proportion, Magnitude)
 
-plot_att_est_trends <- ggplot(
-  summ_att,
-  aes(
-    x     = Magnitude,
-    y     = mean_est,
-    color = Treatment
+# Should be 27
+nrow(scenario_key_att)
+
+# Then join with characters on both sides
+att_bias_plot_data <- prep_att_bias |>
+  mutate(
+    N          = as.character(N),
+    Proportion = as.character(Proportion),
+    Magnitude  = as.character(Magnitude)
+  ) |>
+  left_join(scenario_key_att, by = c("N", "Proportion", "Magnitude")) |>
+  mutate(
+    scenario_id = factor(scenario_id, levels = scenario_id_levels),
+    Treatment   = factor(Treatment,   levels = treatment_order_3row),
+    bias_tier   = case_when(
+      abs(bias) > 50  ~ ">|50|",
+      abs(bias) > 25  ~ ">|25|",
+      TRUE            ~ "<=|25|"
+    ),
+    bias_tier = factor(bias_tier, levels = c("<=|25|", ">|25|", ">|50|"))
   )
-) +
-  geom_hline(
-    aes(yintercept = mean_true),
-    linetype = "dashed", color = "grey30", linewidth = 0.4
-  ) +
-  geom_jitter(
-    width = 0.2,
-    height = 0,
-    size = 3,
-    alpha = 0.7
-  ) +
-  facet_grid(
-    N ~ Proportion,
-    labeller = labeller(
-      N         = function(x) paste0("N = ", x),
-      Proportion = function(x) paste0("Prop. Extreme = ", x)
-    )
-  ) +
-  scale_color_manual(
-    name   = "Data Treatment",
-    values = c(
-      "No treatment"                = "#0072B2",
-      "Top-coding"                  = "#E69F00",
-      "Mean-preserved top-coding"   = "#009E73",
-      "Median-preserved top-coding" = "#CC79A7",
-      "Truncation"                  = "#D55E00"
+
+# Verify 135 rows
+nrow(att_bias_plot_data)
+
+# --- Attach scenario IDs and tiers ---
+att_bias_plot_data <- prep_att_bias |>
+  left_join(scenario_key_att, by = c("N", "Proportion", "Magnitude")) |>
+  mutate(
+    scenario_id = factor(scenario_id, levels = scenario_id_levels),
+    Treatment   = factor(Treatment,   levels = treatment_order_3row),
+    bias_tier   = case_when(
+      abs(bias) > 50  ~ ">|50|",
+      abs(bias) > 25  ~ ">|25|",
+      TRUE            ~ "<=|25|"
     ),
-    labels = label_wrap_gen(width = 20)   # wraps legend text
-  ) +
-  labs(
-    title    = "ATT: Scenario-Level Estimates Across Magnitude of Extremes",
-    subtitle = stringr::str_wrap(
-      "Rows = N; Cols = proportion extreme; dashed line = zero bias; points show scenario-level bias",
-      width = 90   # adjust to match your plot width
-    ),
-    x = "Magnitude level",
-    y = "Bias (ATT scale)"
-  ) +
-  theme_minimal() +
+    bias_tier = factor(bias_tier, levels = c("<=|25|", ">|25|", ">|50|"))
+  )
+
+# --- ATT bias axis limits ---
+att_x_min <- min(att_bias_plot_data$bias, na.rm = TRUE)
+att_x_max <- max(att_bias_plot_data$bias, na.rm = TRUE)
+att_bias_y_lims <- c(att_x_min, att_x_max)
+
+att_bias_colors <- c(
+  "<=|25|" = "steelblue",
+  ">|25|"  = "orange",
+  ">|50|"  = "red"
+)
+
+# --- Panel builder wrapper ---
+make_att_bias <- function(trt, show_x, show_y) {
+  make_lolly_panel(
+    data        = att_bias_plot_data |> dplyr::filter(Treatment == trt),
+    yvar        = bias,
+    tier_var    = bias_tier,
+    y_limits    = att_bias_y_lims,
+    tier_colors = att_bias_colors,
+    tier_name   = "|Bias| threshold",
+    panel_title = trt,
+    show_x_axis = show_x,
+    show_y_axis = show_y,
+    y_label     = "Mean ATT Bias"
+  )
+}
+
+# --- 5 panels ---
+p_ab1 <- make_att_bias("No treatment", show_x = FALSE, show_y = TRUE)
+p_ab2 <- make_att_bias("Mean-preserved top-coding",show_x = FALSE, show_y = TRUE)
+p_ab3 <- make_att_bias("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
+p_ab4 <- make_att_bias("Top-coding", show_x = TRUE,  show_y = TRUE)
+p_ab5 <- make_att_bias("Truncation", show_x = TRUE,  show_y = FALSE)
+
+# --- Shared legend ---
+tmp_att_bias <- p_ab1 +
   theme(
-    legend.position  = "bottom",
-    legend.title     = element_text(face = "bold"),
-    plot.subtitle    = element_text(color = "grey40", size = 9)  # optional styling
+    legend.position = "bottom",
+    legend.title    = element_text(size = 9),
+    legend.text     = element_text(size = 9)
   )
+shared_att_bias_legend <- gtable::gtable_filter(
+  ggplot2::ggplotGrob(tmp_att_bias), "guide-box"
+)
 
-plot_att_est_trends
-ggsave(here::here(paste0("figures/att_est_trends_", dt, ".png")),
-       plot_att_est_trends, width = 11, height = 7, dpi = 300)
-
-
-#
-# ATT BIAS: trends plot
-# ==
-
-plot_att_bias_trends <- ggplot(
-  summ_att,
-  aes(
-    x     = Magnitude,
-    y     = bias,
-    color = Treatment
-  )
-) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30", linewidth = 0.4) +
-  geom_jitter(
-    width  = 0.2,
-    height = 0,
-    size   = 3,
-    alpha  = 0.7
+# --- Compose ---
+att_bias_patch <- (
+    p_ab1 + plot_spacer() +
+    p_ab2 + p_ab3 +
+    p_ab4 + p_ab5
   ) +
-  facet_grid(
-    N ~ Proportion,
-    labeller = labeller(
-      N         = function(x) paste0("N = ", x),
-      Proportion = function(x) paste0("Prop. Extreme = ", x)
-    )
-  ) +
-  scale_color_manual(
-    name   = "Data Treatment",
-    values = c(
-      "No treatment"                = "#0072B2",
-      "Top-coding"                  = "#E69F00",
-      "Mean-preserved top-coding"   = "#009E73",
-      "Median-preserved top-coding" = "#CC79A7",
-      "Truncation"                  = "#D55E00"
-    ),
-    labels = label_wrap_gen(width = 20)   # wraps legend text
-  ) +
-  labs(
-    title    = "ATT: Scenario-Level Bias Across Magnitude of Extremes",
-    subtitle = stringr::str_wrap(
-      "Rows = N; Cols = proportion extreme; dashed line = zero bias; points show scenario-level bias",
-      width = 90   # adjust to match your plot width
-    ),
-    x = "Magnitude level",
-    y = "Bias (ATT scale)"
-  ) +
-  theme_minimal() +
-  theme(
-    legend.position  = "bottom",
-    legend.title     = element_text(face = "bold"),
-    plot.subtitle    = element_text(color = "grey40", size = 9)  # optional styling
-  )
+  plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
 
-plot_att_bias_trends
-ggsave(here::here(paste0("figures/att_bias_trends_", dt, ".png")),
-       plot_att_bias_trends, width = 11, height = 7, dpi = 300)
+att_bias_title    <- "ATT: Scenario-Level Mean Bias by Treatment"
+att_bias_subtitle <- "X-axis: scenario ID 1–27. Dashed line = zero bias."
 
+x_label_att_bias <- cowplot::ggdraw() +
+  cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
+
+plot_att_bias_3row <- cowplot::plot_grid(
+  cowplot::plot_grid(
+    cowplot::ggdraw() + 
+      cowplot::draw_label(
+        att_bias_title,    
+        fontface = "bold", 
+        size = 13, 
+        hjust = 0, 
+        x = 0.02),
+    cowplot::ggdraw() + 
+      cowplot::draw_label(
+        att_bias_subtitle, 
+        size = 10, 
+        colour = "grey40", 
+        hjust = 0, x = 0.02),
+    ncol = 1, rel_heights = c(0.6, 0.4)
+  ),
+  att_bias_patch,
+  cowplot::plot_grid(
+    x_label_att_bias, shared_att_bias_legend,
+    ncol = 1, rel_heights = c(0.35, 0.65)
+  ),
+  ncol = 1, rel_heights = c(0.1, 1, 0.15)
+)
+plot_att_bias_3row
+
+ggsave(
+  here::here(paste0("figures/att_bias_lollipop_3row_", dt, ".png")),
+  plot_att_bias_3row, width = 13, height = 13, dpi = 300
+)
 ```
 
+
+```{r}
+plot_att_bias_dist <- all_df_att |>
+  mutate(
+    treatment_fct = factor(Treatment, levels = rev(c(
+      "No treatment",
+      "Top-coding",
+      "Mean-preserved top-coding",
+      "Median-preserved top-coding",
+      "Truncation"
+    )))
+  ) |>
+  mutate(dist_from_zero = abs(bias)) |>
+  ggplot(aes(x = bias, y = treatment_fct, color = dist_from_zero)) +
+  geom_jitter(height = 0.2, size = 1.2, alpha = 0.4) +
+  stat_summary(
+    fun = mean, geom = "point", shape = "|",
+    size = 3, color = "goldenrod"
+  ) +
+  # geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  scale_color_gradient(low = "steelblue", high = "red", name = "Distance from 0") +
+  facet_grid(N + Magnitude ~ Proportion,
+             labeller = labeller(
+               N        = function(x) paste0("N=", x),
+               Proportion = function(x) paste0("Prop=", x),
+               Magnitude   = function(x) paste0("Mag=", x)
+             )) +
+  labs(
+    title    = "Distribution of ATT Bias by Data Treatment and Condition",
+    subtitle = "Each point = one replication; gold bar = mean",
+    x        = "Bias (ATT hat - ATT true)",
+    y        = "Data treatment method"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text          = element_text(face = "bold", size = 7),
+    legend.position     = "none",
+    plot.margin         = margin(t = 5, r = 40, b = 5, l = 5, unit = "pt")
+  ) +
+  coord_cartesian(clip = "off")
+
+plot_att_bias_dist
+
+ggsave(
+  here::here(paste0("figures/att_bias_distribution_", dt, ".png")),
+  plot_att_bias_dist, width = 14, height = 20, dpi = 300
+)
+```
 
 
 
