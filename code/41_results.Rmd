@@ -331,7 +331,9 @@ all_df_gamma |>
 
 ```  
 
-## Descr bias on interaction  
+## Bias
+
+### Descriptives  
 
 
 ```{r descr_bias}
@@ -413,14 +415,13 @@ write.csv(tbl_bias_scen,
 
 ```  
 
-## Over/under estimation  
+### Over/under estimation  
 
 ```{r over_underests}
-# Replicate-level indicator of underestimation for gamma model
 tbl_bias_UnderOver_scen <- all_df_gamma %>%
   group_by(Treatment, N, Proportion, Magnitude) %>%
   summarise(
-    n_under = sum(est < true, na.rm = TRUE), # count of underestimates 
+    n_under = sum(est < true, na.rm = TRUE),
     n_over = sum(est > true, na.rm = TRUE),
     under_rate = mean(est < true, na.rm = TRUE),
     over_rate  = mean(est > true, na.rm = TRUE),
@@ -434,59 +435,46 @@ tbl_bias_UnderOver_scen <- all_df_gamma %>%
   ungroup() |> 
   select(Treatment, n_design, N, Proportion, Magnitude, n_under, n_over, pct_under, pct_over, under_rate, over_rate) |> 
   mutate(
-     # 'consistently under' if majority of reps are < 0 bias in that scenario
     under_majority = under_rate > 0.5,
     over_majority  = over_rate > 0.5
   )
 
-# Not including, per meeting with Tsai 
 tbl_bias_UnderOver_scen |> 
   arrange(N, Proportion, Magnitude, Treatment) |> 
   select(-c(under_rate, over_rate)) |> 
   gt() |> 
-  gt::gtsave(
-    here::here("results/tbl_over_under_scen.rtf")
-)
+  gt::gtsave(here::here("results/tbl_over_under_scen.rtf"))
+
 ```    
 
 ```{r bias_by_scen}
 scenario_summary <- tbl_bias_UnderOver_scen |>
   group_by(N, Proportion, Magnitude) |>
   summarise(
-    n_treatments = n(),   # should equal number of treatments
-
-    # counts of treatments that under/over
+    n_treatments = n(),
     n_treat_under = sum(under_rate > 0.5, na.rm = TRUE),
     n_treat_over  = sum(over_rate  > 0.5, na.rm = TRUE),
-
-    # counts of treatments with majority under/over
     n_treat_under_majority = sum(under_majority, na.rm = TRUE),
     n_treat_over_majority  = sum(over_majority,  na.rm = TRUE),
-
-    # proportions (denominator = number of treatments)
     prop_treat_under = n_treat_under / n_treatments,
     prop_treat_over  = n_treat_over  / n_treatments,
     prop_treat_under_majority = n_treat_under_majority / n_treatments,
-
     .groups = "drop"
   )
 
-# Not using per Tsai
 scenario_summary |>
   gt() |>
-  gtsave(
-    here::here("results/tbl_over_under_scen_summary.rtf")
-  )
+  gtsave(here::here("results/tbl_over_under_scen_summary.rtf"))
 
 ```
 
 
 
-## Plots  
+### Plots  
 
-### Lollipop  
+#### Lollipop  
 
-```{r lolly1}
+```{r prep_lolli}
 
 prep_plot_bias_over_under <- all_df_gamma |>
   group_by(Treatment, N, Proportion, Magnitude) |> 
@@ -506,40 +494,42 @@ prep_plot_bias_over_under <- all_df_gamma |>
     scenario = factor(scenario, levels = rev(unique(scenario)))
   )
 
-x_min <- min(prep_plot_bias_over_under$bias, na.rm = TRUE) # -0.024372
-x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE) # 0.095811
+x_min <- min(prep_plot_bias_over_under$bias, na.rm = TRUE)
+x_max <- max(prep_plot_bias_over_under$bias, na.rm = TRUE)
 
-# table 
+# Investigate discrepancy: positive mean bias but majority of reps underestimating
+check_discrepancy <- prep_plot_bias_over_under |>
+  filter(bias > 0 & under_majority == TRUE) |>
+  select(Treatment, N, Proportion, Magnitude, bias, n_under, n_over, under_rate, scenario)
+
+check_discrepancy |>
+  ggplot(aes(x = bias, y = under_rate, label = scenario)) +
+  geom_point() +
+  ggrepel::geom_text_repel(size = 3) +
+  facet_wrap(~Treatment) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  labs(x = "Mean bias", y = "Proportion of reps underestimating",
+       title = "Scenarios with positive mean bias but majority of reps underestimating")
+
+# tab_27 - now consistent: scen_under uses under_majority to match scen_under_majority
 tab_27 <- prep_plot_bias_over_under |>
   group_by(Treatment) |>
   summarise(
-    n_scen = n(),   # should be 27
-
-    scen_under = sum(bias < 0, na.rm = TRUE),
-    scen_over  = sum(bias > 0, na.rm = TRUE),
+    n_scen = n(),
+    scen_under = sum(under_majority, na.rm = TRUE),
+    scen_over  = sum(over_majority, na.rm = TRUE),
     scen_under_majority = sum(under_majority, na.rm = TRUE),
-
     prop_scen_under = scen_under / 27,
     prop_scen_over  = scen_over  / 27,
     prop_scen_under_majority = scen_under_majority / 27,
-
     .groups = "drop"
   )
-
-tab_27 |> 
-  mutate(
-    prop_scen_under = scales::percent(prop_scen_under, accuracy = 0.1),
-    prop_scen_over  = scales::percent(prop_scen_over, accuracy = 0.1),
-    prop_scen_under_majority = scales::percent(
-      prop_scen_under_majority, accuracy = 0.1),
-  ) |> 
-  gt() |> 
-  gtsave(here::here("results/tab_27.rtf"))
 ```  
 
 
 
-```{r lolli3_replace}
+```{r lolli_scen}
 
 # Attach scenario IDs and tiers
 bias_plot_data <- prep_plot_bias_over_under |>
@@ -626,9 +616,9 @@ ggsave(
 )
 
 ```
+#### Lolli treatment
 
-
-```{r plots_dir}
+```{r lolli_treat}
 
 prep_plot_bias_lollipop <- all_df_gamma %>%
   group_by(Treatment) %>%
@@ -650,10 +640,10 @@ plot_bias_lollipop <- prep_plot_bias_lollipop |>
   scale_color_manual(values = c("Underestimation (−)" = "#C7372F", "Overestimation (+)" = "#2B6CB0")) +
   scale_x_discrete(labels = scales::label_wrap(15))+
   labs(
-    title = "Gamma Interaction: Average Scenario-Mean Bias by Treatment",
-    subtitle = "Positive = overestimation; Negative = underestimation",
+    title = "Average Bias by Data Treatment Method",
+    subtitle = "Positive = overestimation (>0); Negative = underestimation (<0)",
     x = NULL, 
-    y = stringr::str_wrap("Average of scenario means (bias)"), width=20) +
+    y = "Average bias") +
   theme_minimal() +
   theme(legend.position = "top",
         axis.text.x = element_text(size=9, lineheight=0.9))
@@ -664,7 +654,7 @@ ggsave(here::here(paste0("figures/gamma_bias_lollipop_", dt, ".png")),
 ```  
 
 
-### Jitter plot for how bias changes across conditions  
+#### Jitter (4-way)     
 
 ```{r bias_jitter}
 # --- Trend lines including n as a scenario condition ---
@@ -718,18 +708,29 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 
 ```  
 
-### plot_est_dist
+#### plot dist
 
 ```{r}
-plot_est_dist2 <- all_df_gamma |>
-  mutate(Magnitude = factor(Magnitude)) |>
-  ggplot(aes(x = est, y = Treatment)) +
-  geom_jitter(height = 0.2, size = 0.3, alpha = 0.2, color = "steelblue") +
+plot_est_dist <- all_df_gamma |>
+  mutate(
+    Magnitude = factor(Magnitude),
+    Treatment = factor(Treatment, levels = rev(c(
+      "No treatment",
+      "Top-coding",
+      "Mean-preserved top-coding",
+      "Median-preserved top-coding",
+      "Truncation"
+    )))
+  ) |>
+  mutate(dist_from_zero = abs(est)) |>
+  ggplot(aes(x = est, y = Treatment, color = dist_from_zero)) +
+  geom_jitter(height = 0.2, size = 1.2, alpha = 0.4) +
   stat_summary(
     fun = mean, geom = "point", shape = "|",
     size = 5, color = "goldenrod"
   ) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  #geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  scale_color_gradient(low = "steelblue", high = "red", name = "Distance from 0") +
   facet_grid(N + Magnitude ~ Proportion,
              labeller = labeller(
                N          = function(x) paste0("N=", x),
@@ -738,19 +739,21 @@ plot_est_dist2 <- all_df_gamma |>
              )) +
   labs(
     title    = "Distribution of Gamma Interaction Estimates by Treatment and Scenario",
-    subtitle = "Each point = one replication; gold bar = mean; dashed line = true value (0)",
+    subtitle = "Each point = one replication; gold bar = mean",
     x        = "Estimate",
-    y        = "Treatment"
+    y        = "Data treatment method"
   ) +
   theme_minimal(base_size = 10) +
   theme(
-    plot.title          = element_text(face = "bold"),
+    plot.title = element_text(face = "bold"),
     plot.title.position = "plot",
-    strip.text          = element_text(face = "bold", size = 7),
-    legend.position     = "none"
-  )
+    strip.text = element_text(face = "bold", size = 7),
+    legend.position = "none",
+    plot.margin = margin(t=5, r=40, b=5, l=5, unit="pt")
+  )+
+  coord_cartesian(clip="off")
 
-plot_est_dist2
+plot_est_dist
 
 ggsave(
   here::here(paste0("figures/gamma_est_distribution_", dt, ".png")),
@@ -760,7 +763,9 @@ ggsave(
 
 
 
-## RQ2: Empirical SE  
+## ESE   
+
+### Descriptives
 
 ```{r ESE}
 
@@ -846,7 +851,7 @@ fn_save_results(ese_by_treatment_scen_descr)
 
 ```
 
-
+### Lollipop  
 
 ```{r ese_plots}
 
@@ -931,7 +936,9 @@ ggsave(
 )
 
 ```  
+## Coverage  
 
+### Descriptives
 
 ```{r cov_tables}
 # Overall (N = 67,371 reps)
@@ -996,6 +1003,8 @@ fn_save_results(tab_cov_scenario)
 fn_save_results(tab_cov_by_treatment_scen)
 ```  
 
+### Plots
+
 ```{r cov_scen_freqs}
 janitor::tabyl(tab_cov_scenario$meets_95)
  # tab_cov_scenario$meets_95  n   percent
@@ -1015,7 +1024,7 @@ janitor::tabyl(tab_cov_scenario, Treatment, meets_95) |>
  #                  Truncation 74.1% (20) 25.9%  (7)
 ```
 
-### Zip plot coverage  
+#### Zip plot  
 ```{r}
 zip_data <- all_df_gamma |>
   filter(!is.na(est), !is.na(se)) |>
@@ -1070,7 +1079,7 @@ ggsave(
 )
 
 ```
-
+#### Lollipop
 
 ```{r}
 
@@ -1177,7 +1186,8 @@ ggsave(
 )
 ```
 
-2C. Coverage heatmap vs nominal 0.95  
+#### Heatmap  
+
 ```{r plot_cov_heat}
 
 cov_min <- floor(min(tab_cov_scenario$coverage, na.rm = TRUE) * 100) / 100
@@ -1660,7 +1670,7 @@ combined_table <- type3_df %>%
     # Add interpretation column (handle NAs for intercept)
     Interpretation = case_when(
       is.na(Eta2_partial) ~ "N/A",           # Handle NAs first
-      Eta2_partial < 0.01 ~ "Negligible",
+      Eta2_partial < 0.01 ~ "Trivial",
       Eta2_partial < 0.06 ~ "Small",
       Eta2_partial < 0.14 ~ "Medium",
       TRUE ~ "Large"
@@ -1912,11 +1922,11 @@ library(ggplot2)
 
 # Need to go back to BEFORE formatting p-values
 plot_data <- type3_df %>%
-  left_join(eta2_part_df, by = c("Term" = "Parameter")) %>%
+  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
   filter(Term != "(Intercept)") %>%
   filter(`Pr(>F)` < 0.05) %>%  # Use numeric p-values BEFORE formatting
   mutate(
-    Term = reorder(Term, Eta2_partial),
+    Term = reorder(Term, Eta2),
     Significant = case_when(
       `Pr(>F)` < 0.001 ~ "p < .001",
       `Pr(>F)` < 0.01 ~ "p < .01",
@@ -1927,9 +1937,9 @@ plot_data <- type3_df %>%
 
 library(patchwork)  # For combining plots
 
-# Zoomed-in version (what you have now)
+# Zoomed-in version 
 p_zoomed <- ggplot(
-  plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
   geom_col() +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
@@ -1939,7 +1949,7 @@ p_zoomed <- ggplot(
   ) +
   labs(
     title = "A) Zoomed View",
-    x = "Partial η²",
+    x = "η²",
     y = "Effect"
   ) +
   theme_minimal() +
@@ -1947,7 +1957,7 @@ p_zoomed <- ggplot(
 
 # Full scale version (shows context)
 p_full <- ggplot(
-  plot_data, aes(x = Eta2_partial, y = Term, fill = Significant)) +
+  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
   geom_col() +
   geom_vline(
     xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.7) +
@@ -1956,11 +1966,14 @@ p_full <- ggplot(
   geom_vline(
     xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.7) +
   annotate(
-    "text", x = 0.01, y = 6.5, label = "Small", size = 3, color = "red") +
+    "text", x = 0.01, y = 0.3, label = "Small", size = 3, color = "red",
+    vjust = 1, angle = 0) +
   annotate(
-    "text", x = 0.06, y = 6.5, label = "Med", size = 3, color = "orange") +
+    "text", x = 0.06, y = 0.3, label = "Med", size = 3, color = "orange",
+    vjust = 1, angle = 0) +
   annotate(
-    "text", x = 0.14, y = 6.5, label = "Large", size = 3, color = "green") +
+    "text", x = 0.14, y = 0.3, label = "Large", size = 3, color = "green",
+    vjust = 1, angle = 0) +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
                "p < .01" = "cornflowerblue",
@@ -1973,27 +1986,50 @@ p_full <- ggplot(
   ) +
   labs(
     title = "B) Full Scale (with benchmarks)",
-    x = "Partial η²",
+    x = "η²",
     y = NULL
   ) +
   theme_minimal() +
   theme(
-    legend.position = "bottom",
-    axis.text.y = element_blank()  # Remove duplicate y-axis labels
+    legend.position    = "bottom",
+    legend.justification = "center",
+    axis.text.y = element_blank()
   )
 
 # Combine side by side
-p_combined <- p_zoomed + p_full +
-  plot_annotation(
-    title = "Partial Eta-Squared for Significant Effects: Gamma Model Bias",
-    subtitle = "All effects are negligible - even the largest (0.0027) is far below the 'small' benchmark (0.01)",
-    theme = theme(
-      plot.title = element_text(face = "bold", size = 14),
-      plot.subtitle = element_text(size = 11, color = "gray30")
-    )
-  )
+p_zoomed <- p_zoomed + theme(legend.position = "none")
+p_full   <- p_full   + theme(legend.position = "bottom", legend.justification = "center")
+
+# Extract legend from p_full
+legend <- cowplot::get_legend(
+  p_full + theme(legend.position = "bottom", legend.justification = "center")
+)
+
+# Strip legends from both plots
+p_zoomed2 <- p_zoomed + theme(legend.position = "none")
+p_full2   <- p_full   + theme(legend.position = "none")
+
+# Combine plots
+p_row <- cowplot::plot_grid(p_zoomed2, p_full2, nrow = 1)
+
+# Stack with title and legend
+title <- cowplot::ggdraw() +
+  cowplot::draw_label(
+    "Eta-Squared for Significant Effects: Gamma Model Bias",
+    fontface = "bold", size = 14)
+subtitle <- cowplot::ggdraw() +
+  cowplot::draw_label(
+    "All effects are trivial - even the largest (0.003) is far below the 'small' benchmark (0.01)",
+    size = 11, colour = "gray30")
+
+p_combined <- cowplot::plot_grid(
+  title, subtitle, p_row, legend,
+  ncol = 1,
+  rel_heights = c(0.08, 0.06, 1, 0.1)
+)
 
 print(p_combined)
+
 
 ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
        p_combined, width = 14, height = 6, dpi = 300)
