@@ -780,7 +780,7 @@ compute_ESE_metrics <- function(
       n_reps            = n(),
       # Core ESE
       ese               = sd(est, na.rm = TRUE),
-      mcse_ese          = sd(est, na.rm = TRUE) / sqrt(n()),
+      # mcse_ese          = sd(est, na.rm = TRUE) / sqrt(n()),
       # Model SE summaries
       se_model_mean     = mean(se, na.rm = TRUE),
       se_model_median   = median(se, na.rm = TRUE),
@@ -1477,9 +1477,9 @@ fn_save_results(att_bias_by_scenario)
 ```  
 
 ```{r plot_att_est_bias}
-# ================================================================
+
 # ATT ESTIMATE: trends plot
-# ================================================================
+
 summ_att <- summ_grid |> 
   filter(model=="ATT") |> 
   select(-c(mean_model_se, rmse, coverage))
@@ -1541,9 +1541,9 @@ ggsave(here::here(paste0("figures/att_est_trends_", dt, ".png")),
        plot_att_est_trends, width = 11, height = 7, dpi = 300)
 
 
-# ================================================================
+#
 # ATT BIAS: trends plot
-# ================================================================
+# ==
 
 plot_att_bias_trends <- ggplot(
   summ_att,
@@ -1631,7 +1631,7 @@ model <- aov(
 type3_anova <- car::Anova(model, type = "III")
 
 
-# 3: Comb. table ===================================================
+# 3: Comb. table
 # Type III SS + Effect Sizes
 
 # Extract Type III results
@@ -1681,13 +1681,13 @@ combined_table <- type3_df %>%
 
 print(combined_table)
 
-# 4: Export ===================================================
+# 4: Export
 write.csv(combined_table, 
           here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
           row.names = FALSE)
 
 
-# id sig, large es =========================================
+# id sig, large es
 # Identify Significant Effects and Large Effect Sizes
 
 significant_effects <- combined_table %>%
@@ -1706,7 +1706,7 @@ large_effects <- combined_table %>%
 cat("\n=== SMALL OR LARGER EFFECT SIZES (η²p ≥ .01) ===\n")
 print(large_effects)
 
-# 8: Summary stats ===========================================
+# 8: Summary stats
 
 # Exclude intercept for summary
 combined_no_int <- combined_table %>% filter(Term != "(Intercept)")
@@ -1733,7 +1733,7 @@ cat("sample size, proportion of extremes, and magnitude have minimal practical\n
 cat("impact on bias. The vast majority of variance in bias (>99%) is due to\n")
 cat("random sampling variability, not systematic differences between conditions.\n")
 
-# Opt: Post hocs ==============================================
+# Opt: Post hocs 
 # OPTIONAL: Post-hoc tests for significant main effects
 
 # library(emmeans)
@@ -1777,7 +1777,7 @@ cat("random sampling variability, not systematic differences between conditions.
 #             row.names = FALSE)
 # }
 # 
-# # Opt: Check assumptions =====================================
+# # Opt: Check assumptions 
 # # OPTIONAL: Check ANOVA assumptions
 # 
 # cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
@@ -1848,9 +1848,9 @@ means_trt_prop <- all_df_gamma |>
     .groups   = "drop"
   )
 
-# ================================================================
+# 
 # MEANS-ONLY INTERACTION PLOTS
-# ================================================================
+# 
 
 # ---- Means-only: faceted by treatment ----
 
@@ -1914,11 +1914,6 @@ ggsave(here::here(paste0("figures/anova_means_trt_prop_facet_", dt, ".png")),
 
 
 ```{r bias_es}
-# Plot partial eta² for significant effects
-# plot pes ===================================================
-# Step 9: Visualize Effect Sizes (CORRECTED)
-
-library(ggplot2)
 
 # Need to go back to BEFORE formatting p-values
 plot_data <- type3_df %>%
@@ -1937,98 +1932,62 @@ plot_data <- type3_df %>%
 
 library(patchwork)  # For combining plots
 
-# Zoomed-in version 
 p_zoomed <- ggplot(
   plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
   geom_col() +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
-               "p < .01" = "cornflowerblue",
-               "p < .05" = "lightblue"),
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
     name = "Significance"
   ) +
-  labs(
-    title = "A) Zoomed View",
-    x = "η²",
-    y = "Effect"
-  ) +
+  labs(title = "A) Zoomed View", x = "η²", y = "Effect") +
   theme_minimal() +
-  theme(legend.position = "none")
+  theme(legend.position = "bottom")
 
-# Full scale version (shows context)
 p_full <- ggplot(
   plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
   geom_col() +
-  geom_vline(
-    xintercept = 0.01, linetype = "dashed", color = "red", alpha = 0.7) +
-  geom_vline(
-    xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
-  geom_vline(
-    xintercept = 0.14, linetype = "dashed", color = "green", alpha = 0.7) +
-  annotate(
-    "text", x = 0.01, y = 0.3, label = "Small", size = 3, color = "red",
-    vjust = 1, angle = 0) +
-  annotate(
-    "text", x = 0.06, y = 0.3, label = "Med", size = 3, color = "orange",
-    vjust = 1, angle = 0) +
-  annotate(
-    "text", x = 0.14, y = 0.3, label = "Large", size = 3, color = "green",
-    vjust = 1, angle = 0) +
+  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red",    alpha = 0.7) +
+  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
+  geom_vline(xintercept = 0.14, linetype = "dashed", color = "darkgreen", 
+             alpha = 0.7) +
+  annotate("text", x = 0.01, y = 0.5, label = "Small", size = 3, color = "red",
+           vjust = 0, hjust = -0.1) +
+  annotate("text", x = 0.06, y = 0.5, label = "Med",   size = 3, color = "orange", 
+           vjust = 0, hjust = -0.1) +
+  annotate("text", x = 0.14, y = 0.5, label = "Large", size = 3, color = "darkgreen",
+           vjust = 0, hjust = -0.1) +
   scale_fill_manual(
     values = c("p < .001" = "steelblue", 
-               "p < .01" = "cornflowerblue",
-               "p < .05" = "lightblue"),
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
     name = "Significance"
   ) +
-  scale_x_continuous(
-    limits = c(0, 0.15),
-    breaks = seq(0, 0.15, 0.03)
-  ) +
-  labs(
-    title = "B) Full Scale (with benchmarks)",
-    x = "η²",
-    y = NULL
-  ) +
+  scale_x_continuous(limits = c(0, 0.20), breaks = seq(0, 0.15, 0.03)) +
+  labs(title = "B) Full Scale (with benchmarks)", x = "η²", y = NULL) +
   theme_minimal() +
   theme(
-    legend.position    = "bottom",
-    legend.justification = "center",
-    axis.text.y = element_blank()
+    axis.text.y     = element_blank(),
+    legend.position = "bottom",
+    plot.margin     = margin(t = 5, r = 5, b = 5, l = 5, unit = "pt")
   )
 
-# Combine side by side
-p_zoomed <- p_zoomed + theme(legend.position = "none")
-p_full   <- p_full   + theme(legend.position = "bottom", legend.justification = "center")
-
-# Extract legend from p_full
-legend <- cowplot::get_legend(
-  p_full + theme(legend.position = "bottom", legend.justification = "center")
-)
-
-# Strip legends from both plots
-p_zoomed2 <- p_zoomed + theme(legend.position = "none")
-p_full2   <- p_full   + theme(legend.position = "none")
-
-# Combine plots
-p_row <- cowplot::plot_grid(p_zoomed2, p_full2, nrow = 1)
-
-# Stack with title and legend
-title <- cowplot::ggdraw() +
-  cowplot::draw_label(
-    "Eta-Squared for Significant Effects: Gamma Model Bias",
-    fontface = "bold", size = 14)
-subtitle <- cowplot::ggdraw() +
-  cowplot::draw_label(
-    "All effects are trivial - even the largest (0.003) is far below the 'small' benchmark (0.01)",
-    size = 11, colour = "gray30")
-
-p_combined <- cowplot::plot_grid(
-  title, subtitle, p_row, legend,
-  ncol = 1,
-  rel_heights = c(0.08, 0.06, 1, 0.1)
-)
+p_combined <- p_zoomed + p_full +
+  guide_area() +
+  plot_layout(ncol = 2, nrow = 2, guides = "collect",
+              design = "AB
+                        CC",
+              heights = c(1, 0.05)) +
+  plot_annotation(
+    title    = "Eta-Squared for Significant Effects: Gamma Model Bias",
+    subtitle = "All effects are trivial - even the largest (0.003) is far below the 'small' benchmark (0.01)"
+  )
 
 print(p_combined)
+
+ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
+       p_combined, width = 14, height = 6, dpi = 300)
 
 
 ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
