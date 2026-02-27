@@ -431,7 +431,7 @@ run_mc <- function(
 #Step 1: Representative dataset (histograms + model fits)
 ```{r dat_example}
 set.seed(123)
-dat_example <- simulate_panel_data(
+dat_example1 <- simulate_panel_data(
   n = 2500, # actually 5k
   magnitude_level = 1,
   prop_extreme = 0.01,
@@ -443,7 +443,7 @@ dat_example <- simulate_panel_data(
 # Helper for quantiles
 q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
-tab_y_example <- dat_example %>%
+tab_y_example1 <- dat_example1 %>%
   # dplyr::group_by(treatment) %>%
   dplyr::summarise(
     nobs        = dplyr::n(),
@@ -459,7 +459,7 @@ tab_y_example <- dat_example %>%
     .groups = "drop"
   )
 
-dat_example |> 
+dat_example1 |> 
 	select(
 		TOTEXPYY,
 		ind_post,
@@ -481,29 +481,249 @@ dat_example |>
 	# add_p() |> 
 	gtsummary::add_overall()
 
-p1 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
+p1 <- ggplot(dat_example1, aes(x = TOTEXPYY)) +
   geom_histogram(bins = 100, fill = "skyblue", color = "black") +
   scale_x_continuous(labels = scales::comma) +
   labs(title = "Histogram of TOTEXPYY", x = "Spending", y = "Count") +
   theme_minimal()
 
-p2 <- ggplot(dat_example, aes(x = TOTEXPYY)) +
-  geom_histogram(bins = 100, fill = "seagreen", color = "black") +
-  scale_x_log10(labels = scales::comma) +
-  labs(title = "Histogram of TOTEXPYY (log scale)", x = "Spending (log)", y = "Count") +
-  theme_minimal()
+# p2 <- ggplot(dat_example1, aes(x = TOTEXPYY)) +
+#   geom_histogram(bins = 100, fill = "seagreen", color = "black") +
+#   scale_x_log10(labels = scales::comma) +
+#   labs(title = "Histogram of TOTEXPYY (log scale)", x = "Spending (log)", y = "Count") +
+#   theme_minimal()
 
 print(p1); print(p2)
 
 fit_logit <- glm(ind_gt0 ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
-                 data = dat_example, family = binomial)
+                 data = dat_example1, family = binomial)
 
 fit_gamma <- glm(TOTEXPYY ~ ind_post*ind_tx + ind_female + HISPANX + zPCS,
-                 data = dat_example %>% filter(ind_gt0 == 1),
+                 data = dat_example1 %>% filter(ind_gt0 == 1),
                  family = Gamma(link = "log"))
 
 summary(fit_logit)
 summary(fit_gamma)
+
+dat_example2 <- simulate_panel_data(
+  n = 2500, # actually 5k
+  magnitude_level = 1,
+  prop_extreme = 0.05,
+  gamma_shape = 3,
+  COEF = COEF
+)
+
+dat_example3 <- simulate_panel_data(
+  n = 2500, # actually 5k
+  magnitude_level = 1,
+  prop_extreme = 0.1,
+  gamma_shape = 3,
+  COEF = COEF
+)
+
+# Combine all three example datasets with a label
+dat_combined <- bind_rows(
+  dat_example1 %>% mutate(prop_extreme_lbl = "1% Extreme"),
+  dat_example2 %>% mutate(prop_extreme_lbl = "5% Extreme"),
+  dat_example3 %>% mutate(prop_extreme_lbl = "10% Extreme")
+) %>%
+  mutate(
+    prop_extreme_lbl = factor(
+      prop_extreme_lbl,
+      levels = c("1% Extreme", "5% Extreme", "10% Extreme")
+    )
+  )
+
+
+plot_boxplot_extremes <- ggplot(
+  dat_combined,
+  aes(x = prop_extreme_lbl, y = TOTEXPYY, 
+      fill = prop_extreme_lbl, color = prop_extreme_lbl)
+) +
+  geom_boxplot(
+    outlier.shape  = 16,
+    outlier.size   = 0.8,
+    outlier.alpha  = 0.4,
+    width          = 0.5,
+    color          = "grey30",   # fixed outline color so boxes don't blend in
+    linewidth      = 0.5
+  ) +
+  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
+  scale_fill_manual(
+    values = c(
+      "1% Extreme"  = "#4E9ABE",
+      "5% Extreme"  = "#F4A261",
+      "10% Extreme" = "#E76F51"
+    ),
+    guide = "none"
+  ) +
+  scale_color_manual(
+    values = c(
+      "1% Extreme"  = "#4E9ABE",
+      "5% Extreme"  = "#F4A261",
+      "10% Extreme" = "#E76F51"
+    ),
+    guide = "none"
+  ) +
+  labs(
+    title    = "Distribution of Total Expenditures by Proportion of Extreme Values",
+    subtitle = "Magnitude level = 1 ($50,000–$1,000,000); Sample size = 5,000; outlier dots show extreme values",
+    x        = "Proportion of Extreme Values",
+    y        = "Total Expenditure"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold"),
+    plot.subtitle      = element_text(color = "grey40"),
+    panel.grid.major.x = element_blank()
+  )
+
+plot_boxplot_extremes
+
+ggsave(
+  here::here(paste0("figures/boxplot_extremes_", dt, ".png")),
+  plot_boxplot_extremes,
+  width = 8, height = 6, dpi = 300
+)
+
+library(patchwork)
+
+# Left panel: zoomed in on bulk of distribution
+p_zoom <- ggplot(
+  dat_combined,
+  aes(x = prop_extreme_lbl, y = TOTEXPYY, fill = prop_extreme_lbl)
+) +
+  geom_violin(
+    trim  = FALSE,
+    alpha = 0.8,
+    color = "white"
+  ) +
+  geom_boxplot(
+    width         = 0.08,
+    fill          = "white",
+    outlier.shape = NA,
+    color         = "grey30",
+    linewidth     = 0.5
+  ) +
+  coord_cartesian(ylim = c(0, 5000)) +
+  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
+  scale_fill_manual(
+    values = c(
+      "1% Extreme"  = "#4E9ABE",
+      "5% Extreme"  = "#F4A261",
+      "10% Extreme" = "#E76F51"
+    ),
+    guide = "none"
+  ) +
+  labs(
+    title    = "A) Bulk of Distribution",
+    subtitle = "Zoomed to $0–$5K",
+    x        = NULL,
+    y        = "Total Expenditure"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold"),
+    plot.subtitle      = element_text(color = "grey40"),
+    panel.grid.major.x = element_blank()
+  )
+
+library(patchwork)
+
+# Compute a zoom cutoff: just below where extremes start (q95 of prop=0.01 condition)
+zoom_cutoff <- quantile(dat_example1$TOTEXPYY, 0.95)
+
+# --- Left panel: zoomed boxplot of bulk ---
+p_bulk <- ggplot(
+  dat_combined,
+  aes(x = prop_extreme_lbl, y = TOTEXPYY, fill = prop_extreme_lbl)
+) +
+  geom_boxplot(
+    outlier.shape = NA,   # suppress outliers — shown separately on right
+    width         = 0.5,
+    color         = "grey30",
+    linewidth     = 0.5
+  ) +
+  coord_cartesian(ylim = c(0, zoom_cutoff)) +
+  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
+  scale_fill_manual(
+    values = c(
+      "1% Extreme"  = "#4E9ABE",
+      "5% Extreme"  = "#F4A261",
+      "10% Extreme" = "#E76F51"
+    ),
+    guide = "none"
+  ) +
+  labs(
+    title    = "A) Bulk of Distribution",
+    subtitle = glue::glue("Zoomed to ≤ {scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')} (95th percentile)"),
+    x        = NULL,
+    y        = "Total Expenditure"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold"),
+    plot.subtitle      = element_text(color = "grey40"),
+    panel.grid.major.x = element_blank()
+  )
+
+# --- Right panel: only extreme values ---
+dat_extremes <- dat_combined %>%
+  filter(TOTEXPYY > zoom_cutoff)
+
+p_extremes <- ggplot(
+  dat_extremes,
+  aes(x = prop_extreme_lbl, y = TOTEXPYY, color = prop_extreme_lbl)
+) +
+  geom_jitter(
+    width  = 0.2,
+    size   = 1.2,
+    alpha  = 0.4
+  ) +
+  scale_y_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
+  scale_color_manual(
+    values = c(
+      "1% Extreme"  = "#4E9ABE",
+      "5% Extreme"  = "#F4A261",
+      "10% Extreme" = "#E76F51"
+    ),
+    guide = "none"
+  ) +
+  labs(
+    title    = "B) Extreme Values Only",
+    subtitle = glue::glue("Values above 95th percentile ({scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')})"),
+    x        = NULL,
+    y        = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold"),
+    plot.subtitle      = element_text(color = "grey40"),
+    panel.grid.major.x = element_blank()
+  )
+
+# --- Combine ---
+plot_twopanel <- patchwork::wrap_plots(p_bulk, p_extremes, ncol = 2, widths = c(1.2, 1)) +
+  plot_annotation(
+    title    = "Distribution of Total Expenditures by Proportion of Extreme Values",
+    subtitle = "Magnitude level = 1 ($50K–$1M); n = 5,000",
+    caption  = "Note: Panel A shows the bulk of the distribution (below 95th percentile).\nPanel B shows only values above the 95th percentile, illustrating how the extreme tail grows with proportion.",
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(color = "grey40"),
+      plot.caption  = element_text(color = "grey40", hjust = 0)
+    )
+  )
+
+plot_twopanel
+
+ggsave(
+  here::here(paste0("figures/twopanel_extremes_", dt, ".png")),
+  plot_twopanel,
+  width = 11, height = 6, dpi = 300
+)
+
+
 
 ```
 
