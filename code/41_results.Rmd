@@ -1404,6 +1404,8 @@ janitor::tabyl(tab_cov_scenario, Treatment, meets_95) |>
 
 ```{r}
 
+library(ggtext)
+
 # Attach scenario IDs (reuses scenario_key from lolly_setup)
 cov_plot_data <- cov_by_scenario |>
   left_join(scenario_key, by = c("N", "Proportion", "Magnitude")) |>
@@ -1482,15 +1484,28 @@ cov_patch <- (
   plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
 
 cov_title    <- "Gamma Interaction: CI Coverage by Treatment and Scenario"
-cov_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Dashed line = nominal 95%."
+cov_subtitle <- "X-axis: scenario ID 1–27 (see Appendix B). Dashed line = nominal 95%. <span style='color:#2ca02c'>**Green = at/above 95%**</span>; <span style='color:#d62728'>**Red = below 95%**</span>."
 
 x_label_cov <- cowplot::ggdraw() +
   cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
 
 plot_cov_3row <- cowplot::plot_grid(
   cowplot::plot_grid(
-    cowplot::ggdraw() + cowplot::draw_label(cov_title,    fontface = "bold", size = 13, hjust = 0.5),
-    cowplot::ggdraw() + cowplot::draw_label(cov_subtitle, size = 10, colour = "grey40", hjust = 0.5),
+    cowplot::ggdraw() +
+      cowplot::draw_label(cov_title, fontface = "bold", size = 13, hjust = 0.5),
+    ggplot2::ggplot() +
+      ggtext::geom_richtext(
+        aes(x = 0.5, y = 0.5,
+            label = cov_subtitle),
+        size        = 3.5,
+        color       = "grey40",
+        fill        = NA,
+        label.color = NA,
+        hjust       = 0.5,
+        vjust       = 0.5
+      ) +
+      xlim(0, 1) + ylim(0, 1) +
+      theme_void(),
     ncol = 1, rel_heights = c(0.6, 0.4)
   ),
   cov_patch,
@@ -1499,11 +1514,14 @@ plot_cov_3row <- cowplot::plot_grid(
   ncol = 1, rel_heights = c(0.10, 1, 0.15)
 )
 
-plot_cov_3row
+plot_cov_3row  
 
 ggsave(
-  here::here(paste0("figures/gamma_coverage_lollipop_3row_", dt, ".png")),
-  plot_cov_3row, width = 13, height = 13, dpi = 300
+  here::here(paste0("figures/gamma_coverage_3row_", dt, ".png")),
+  plot_cov_3row,
+  width  = 11,
+  height = 9,
+  dpi    = 300
 )
 ```
 
