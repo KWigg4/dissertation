@@ -335,6 +335,8 @@ all_df_gamma |>
 
 ```{r}
 dat_combined <- readRDS(here::here("results/example_datasets.RDS"))
+write.csv(dat_combined,
+          here::here("results/dat_combined.csv"))
 ```
 
 
@@ -443,6 +445,7 @@ p_zoom <- ggplot(
 library(patchwork)
 
 # Compute a zoom cutoff: just below where extremes start (q95 of prop=0.01 condition)
+dat_example1 <- readRDS(here::here("results/example_dataset1.RDS"))
 zoom_cutoff <- quantile(dat_example1$TOTEXPYY, 0.95)
 
 # --- Left panel: zoomed boxplot of bulk ---
@@ -468,7 +471,7 @@ p_bulk <- ggplot(
   ) +
   labs(
     title    = "A) Bulk of Distribution",
-    subtitle = glue::glue("Zoomed to ≤ {scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')} (95th percentile)"),
+    subtitle = glue::glue("Zoomed to ≤ {scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')} \n(95th percentile of example 1)"),
     x        = NULL,
     y        = "Total Expenditure"
   ) +
@@ -480,8 +483,13 @@ p_bulk <- ggplot(
   )
 
 # --- Right panel: only extreme values ---
-dat_extremes <- dat_combined %>%
-  filter(TOTEXPYY > zoom_cutoff)
+# --- Precompute mean and median for extremes panel ---
+dat_extremes_stats <- dat_extremes %>%
+  group_by(prop_extreme_lbl) %>%
+  summarise(
+    mean_val   = mean(TOTEXPYY, na.rm = TRUE),
+    median_val = median(TOTEXPYY, na.rm = TRUE)
+  )
 
 p_extremes <- ggplot(
   dat_extremes,
@@ -491,6 +499,26 @@ p_extremes <- ggplot(
     width  = 0.2,
     size   = 1.2,
     alpha  = 0.4
+  ) +
+  # Mean line
+  geom_crossbar(
+    data     = dat_extremes_stats,
+    aes(y = mean_val, ymin = mean_val, ymax = mean_val),
+    width    = 0.4,
+    color    = "black",
+    linewidth = 0.4,
+    linetype = "solid",
+    fatten   = 0
+  ) +
+  # Median line
+  geom_crossbar(
+    data     = dat_extremes_stats,
+    aes(y = median_val, ymin = median_val, ymax = median_val),
+    width    = 0.4,
+    color    = "black",
+    linewidth = 0.4,
+    linetype = "dashed",
+    fatten   = 0
   ) +
   scale_y_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
   scale_color_manual(
@@ -504,6 +532,7 @@ p_extremes <- ggplot(
   labs(
     title    = "B) Extreme Values Only",
     subtitle = glue::glue("Values above 95th percentile ({scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')})"),
+    caption  = "— Mean  - - Median",
     x        = NULL,
     y        = NULL
   ) +
@@ -511,6 +540,7 @@ p_extremes <- ggplot(
   theme(
     plot.title         = element_text(face = "bold"),
     plot.subtitle      = element_text(color = "grey40"),
+    plot.caption       = element_text(color = "grey30", hjust = 0.5),
     panel.grid.major.x = element_blank()
   )
 
@@ -557,8 +587,9 @@ get_max_bin_count <- function(prop_lbl) {
 right_max_count <- get_max_bin_count("10% Extreme")
 right_max_count  # sanity check
 
-# --- Panel builder ---
-make_hist_panel <- function(prop_lbl, col, show_x, show_y, title = NULL, y_limit = NULL) {
+# Add mean and median lines to right side only: 
+make_hist_panel <- function(
+    prop_lbl, col, show_x, show_y, title = NULL, y_limit = NULL) {
   
   fill_col <- c(
     "1% Extreme"  = "#4E9ABE",
@@ -614,6 +645,26 @@ make_hist_panel <- function(prop_lbl, col, show_x, show_y, title = NULL, y_limit
       axis.ticks.x       = if (show_x) element_line() else element_blank(),
       panel.grid.minor   = element_blank()
     )
+  
+  # Add mean and median lines for right panels only
+  if (col == "right") {
+    mean_val   <- mean(dat$TOTEXPYY, na.rm = TRUE)
+    median_val <- median(dat$TOTEXPYY, na.rm = TRUE)
+    
+    p <- p +
+      geom_vline(
+        xintercept = mean_val,
+        color      = "black",
+        linewidth  = 0.4,
+        linetype   = "solid"
+      ) +
+      geom_vline(
+        xintercept = median_val,
+        color      = "black",
+        linewidth  = 0.4,
+        linetype   = "dashed"
+      )
+  }
   
   p
 }
@@ -1235,7 +1286,7 @@ ese_patch <- (
   plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
 
 ese_title    <- "Gamma Interaction: Scenario-Level Empirical SE by Treatment"
-ese_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Filled dots = empirical SE (coloured by threshold); black crosses = mean model SE."
+ese_subtitle <- "X-axis: scenario ID 1-27 (see companion table). Filled dots = empirical SE (coloured by threshold); grey + = mean model SE."
 
 x_label_ese <- cowplot::ggdraw() +
   cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
@@ -1348,61 +1399,7 @@ janitor::tabyl(tab_cov_scenario, Treatment, meets_95) |>
  #                  Truncation 74.1% (20) 25.9%  (7)
 ```
 
-#### Zip plot  
-```{r}
-zip_data <- all_df_gamma |>
-  filter(!is.na(est), !is.na(se)) |>
-  mutate(
-    z        = (est - true) / se,
-    abs_z    = abs(z),
-    ci_lower = est - 1.96 * se,
-    ci_upper = est + 1.96 * se
-  ) |>
-  group_by(Treatment, N, Proportion, Magnitude) |>
-  arrange(abs_z) |>
-  mutate(frac_centile = row_number() / n() * 100) |>
-  ungroup() |>
-  mutate(cover_label = if_else(cover_ind == 1, "Covers", "Non-coverer"))
 
-# Pick one scenario to demonstrate (e.g. worst coverage scenario)
-# or loop over treatments as Morris does over methods
-zip_plot <- zip_data |>
-  filter(N == "5,000", Proportion == "0.10", Magnitude == 3) |>
-  ggplot(aes(y = frac_centile, color = cover_label)) +
-  geom_segment(aes(x = ci_lower, xend = ci_upper,
-                   yend = frac_centile),
-               alpha = 0.3, linewidth = 0.2) +
-  geom_hline(yintercept = 95, linetype = "dashed", color = "goldenrod") +
-  geom_vline(xintercept = 0, color = "black", linewidth = 0.4) +
-  scale_color_manual(
-    values = c("Covers" = "steelblue", "Non-coverer" = "#9b59b6"),
-    name = NULL
-  ) +
-  facet_wrap(~ Treatment, nrow = 1,
-             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
-  labs(
-    title = "Zip Plot: 95% CI Coverage by Treatment",
-    subtitle = "Scenario: N=5,000, Prop=0.10, Magnitude=3 | Gold line = nominal 95%",
-    x = "95% Confidence Interval",
-    y = "Fractional centile of |z|"
-  ) +
-  theme_minimal(base_size = 10) +
-  theme(
-    plot.title = element_text(face = "bold"),
-    plot.title.position = "plot",
-    strip.text = element_text(face = "bold", size = 8),
-    legend.position = "bottom"
-  )
-
-zip_plot
-
-
-ggsave(
-  here::here(paste0("figures/gamma_zipplot_", dt, ".png")),
-  zip_plot, width = 16, height = 6, dpi = 300
-)
-
-```
 #### Lollipop
 
 ```{r}

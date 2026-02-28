@@ -535,6 +535,8 @@ dat_combined <- bind_rows(
   )
 
 saveRDS(dat_combined, here::here("results/example_datasets.RDS"))
+saveRDS(dat_example1, here::here("results/example_dataset1.RDS"))
+
 
 ```   
 
