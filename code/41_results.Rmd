@@ -60,6 +60,10 @@ q_fun <- function(x, p) stats::quantile(x, probs = p, na.rm = TRUE, type = 7)
 
 ```  
 
+## Configs  
+
+### Get data  
+
 
 ```{r get_replicates}
 # all_df_treatment: summarized at the treatment level only (N=13500 per)
@@ -120,6 +124,8 @@ treatment_order_3row <- c(
 )
 ```    
 
+### make lolli fn  
+
 ```{r make_lolli_panel}
 
 # Single-panel builder shared by both bias and ESE chunks
@@ -159,7 +165,9 @@ make_lolly_panel <- function(
     }
 
   p +
-    scale_color_manual(name = tier_name, values = tier_colors) +
+    scale_color_manual(name = tier_name, 
+                       values = tier_colors, 
+                       drop = FALSE) +
     scale_y_continuous(limits = y_limits) +
     scale_x_discrete(breaks = scenario_id_levels,
                      limits = scenario_id_levels) +
@@ -180,6 +188,7 @@ make_lolly_panel <- function(
 }
 ```
 
+### Scen Key  
 
 ```{r scenario_key_table}
 
@@ -335,67 +344,12 @@ all_df_gamma |>
 
 ```{r}
 dat_combined <- readRDS(here::here("results/example_datasets.RDS"))
-write.csv(dat_combined,
-          here::here("results/dat_combined.csv"))
+# write.csv(dat_combined,
+#          here::here("results/dat_combined.csv"))
 ```
 
 
-### Option 1  
-
-```{r plot_ex_opt1}
-plot_boxplot_extremes <- ggplot(
-  dat_combined,
-  aes(x = prop_extreme_lbl, y = TOTEXPYY, 
-      fill = prop_extreme_lbl, color = prop_extreme_lbl)
-) +
-  geom_boxplot(
-    outlier.shape  = 16,
-    outlier.size   = 0.8,
-    outlier.alpha  = 0.4,
-    width          = 0.5,
-    color          = "grey30",   # fixed outline color so boxes don't blend in
-    linewidth      = 0.5
-  ) +
-  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
-  scale_fill_manual(
-    values = c(
-      "1% Extreme"  = "#4E9ABE",
-      "5% Extreme"  = "#F4A261",
-      "10% Extreme" = "#E76F51"
-    ),
-    guide = "none"
-  ) +
-  scale_color_manual(
-    values = c(
-      "1% Extreme"  = "#4E9ABE",
-      "5% Extreme"  = "#F4A261",
-      "10% Extreme" = "#E76F51"
-    ),
-    guide = "none"
-  ) +
-  labs(
-    title    = "Distribution of Total Expenditures by Proportion of Extreme Values",
-    subtitle = "Magnitude level = 1 ($50,000–$1,000,000); Sample size = 5,000; outlier dots show extreme values",
-    x        = "Proportion of Extreme Values",
-    y        = "Total Expenditure"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title         = element_text(face = "bold"),
-    plot.subtitle      = element_text(color = "grey40"),
-    panel.grid.major.x = element_blank()
-  )
-
-plot_boxplot_extremes
-
-ggsave(
-  here::here(paste0("figures/boxplot_extremes_", dt, ".png")),
-  plot_boxplot_extremes,
-  width = 8, height = 6, dpi = 300
-)
-
-
-```   
+### Extremes / tails  
 
 ### Option 2  
 
@@ -1797,6 +1751,8 @@ fn_save_results(att_bias_by_scenario)
 #### lollipop  
 
 ```{r}
+library(ggtext)
+
 # Build ATT scenario-level summary (like prep_plot_bias_over_under) 
 prep_att_bias <- all_df_att |>
   group_by(Treatment, N, Proportion, Magnitude) |>
@@ -1811,7 +1767,7 @@ prep_att_bias <- all_df_att |>
     over_majority  = over_rate  > 0.5
   ) 
 
-# --- ATT-specific scenario key (same structure, built from all_df_att) ---
+# --- ATT-specific scenario key ---
 scenario_key_att <- prep_att_bias |>
   mutate(
     N          = as.character(N),
@@ -1827,31 +1783,6 @@ scenario_key_att <- prep_att_bias |>
   arrange(nobs_num, prop_num, mag_num) |>
   mutate(scenario_id = row_number()) |>
   select(scenario_id, N, Proportion, Magnitude)
-
-# Should be 27
-nrow(scenario_key_att)
-
-# Then join with characters on both sides
-att_bias_plot_data <- prep_att_bias |>
-  mutate(
-    N          = as.character(N),
-    Proportion = as.character(Proportion),
-    Magnitude  = as.character(Magnitude)
-  ) |>
-  left_join(scenario_key_att, by = c("N", "Proportion", "Magnitude")) |>
-  mutate(
-    scenario_id = factor(scenario_id, levels = scenario_id_levels),
-    Treatment   = factor(Treatment,   levels = treatment_order_3row),
-    bias_tier   = case_when(
-      abs(bias) > 50  ~ ">|50|",
-      abs(bias) > 25  ~ ">|25|",
-      TRUE            ~ "<=|25|"
-    ),
-    bias_tier = factor(bias_tier, levels = c("<=|25|", ">|25|", ">|50|"))
-  )
-
-# Verify 135 rows
-nrow(att_bias_plot_data)
 
 # --- Attach scenario IDs and tiers ---
 att_bias_plot_data <- prep_att_bias |>
@@ -1895,24 +1826,13 @@ make_att_bias <- function(trt, show_x, show_y) {
 }
 
 # --- 5 panels ---
-p_ab1 <- make_att_bias("No treatment", show_x = FALSE, show_y = TRUE)
-p_ab2 <- make_att_bias("Mean-preserved top-coding",show_x = FALSE, show_y = TRUE)
-p_ab3 <- make_att_bias("Median-preserved top-coding", show_x = FALSE, show_y = FALSE)
-p_ab4 <- make_att_bias("Top-coding", show_x = TRUE,  show_y = TRUE)
-p_ab5 <- make_att_bias("Truncation", show_x = TRUE,  show_y = FALSE)
+p_ab1 <- make_att_bias("No treatment",               show_x = FALSE, show_y = TRUE)
+p_ab2 <- make_att_bias("Mean-preserved top-coding",  show_x = FALSE, show_y = TRUE)
+p_ab3 <- make_att_bias("Median-preserved top-coding",show_x = FALSE, show_y = FALSE)
+p_ab4 <- make_att_bias("Top-coding",                 show_x = TRUE,  show_y = TRUE)
+p_ab5 <- make_att_bias("Truncation",                 show_x = TRUE,  show_y = FALSE)
 
-# --- Shared legend ---
-tmp_att_bias <- p_ab1 +
-  theme(
-    legend.position = "bottom",
-    legend.title    = element_text(size = 9),
-    legend.text     = element_text(size = 9)
-  )
-shared_att_bias_legend <- gtable::gtable_filter(
-  ggplot2::ggplotGrob(tmp_att_bias), "guide-box"
-)
-
-# --- Compose ---
+# --- Compose patch ---
 att_bias_patch <- (
     p_ab1 + plot_spacer() +
     p_ab2 + p_ab3 +
@@ -1920,36 +1840,41 @@ att_bias_patch <- (
   ) +
   plot_layout(nrow = 3, ncol = 2, byrow = TRUE)
 
+# --- Titles ---
 att_bias_title    <- "ATT: Scenario-Level Mean Bias by Treatment"
-att_bias_subtitle <- "X-axis: scenario ID 1–27. Dashed line = zero bias."
+att_bias_subtitle <- "X-axis: scenario ID 1–27 (see companion table).\nDashed line = zero bias. <span style='color:steelblue'>**Blue = |bias| \u226425**</span>; <span style='color:orange'>**Orange = |bias| >25**</span>; <span style='color:red'>**Red = |bias| >50**</span>."
 
 x_label_att_bias <- cowplot::ggdraw() +
   cowplot::draw_label("Scenario ID", size = 10, hjust = 0.5)
 
 plot_att_bias_3row <- cowplot::plot_grid(
   cowplot::plot_grid(
-    cowplot::ggdraw() + 
+    cowplot::ggdraw() +
       cowplot::draw_label(
-        att_bias_title,    
-        fontface = "bold", 
-        size = 13, 
-        hjust = 0, 
-        x = 0.02),
-    cowplot::ggdraw() + 
-      cowplot::draw_label(
-        att_bias_subtitle, 
-        size = 10, 
-        colour = "grey40", 
-        hjust = 0, x = 0.02),
+        att_bias_title,
+        fontface = "bold",
+        size     = 13,
+        hjust    = 0,
+        x        = 0.02),
+    ggplot2::ggplot() +
+      ggtext::geom_richtext(
+        aes(x = 0.5, y = 0.5, label = att_bias_subtitle),
+        size        = 3.5,
+        color       = "grey40",
+        fill        = NA,
+        label.color = NA,
+        hjust       = 0.5,
+        vjust       = 0.5
+      ) +
+      xlim(0, 1) + ylim(0, 1) +
+      theme_void(),
     ncol = 1, rel_heights = c(0.6, 0.4)
   ),
   att_bias_patch,
-  cowplot::plot_grid(
-    x_label_att_bias, shared_att_bias_legend,
-    ncol = 1, rel_heights = c(0.35, 0.65)
-  ),
-  ncol = 1, rel_heights = c(0.1, 1, 0.15)
+  x_label_att_bias,
+  ncol = 1, rel_heights = c(0.1, 1, 0.05)
 )
+
 plot_att_bias_3row
 
 ggsave(
