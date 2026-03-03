@@ -1087,112 +1087,9 @@ print(large_effects)
 
 ```  
 
-```{r g_absbias_sigplots}
-
-# Plot significant interactions: 
-# --- Shared theme and color scale for both plots ---
-trt_colors <- c(
-  "No treatment"                = "#0072B2",
-  "Top-coding"                  = "#E69F00",
-  "Mean-preserved top-coding"   = "#009E73",
-  "Median-preserved top-coding" = "#CC79A7",
-  "Truncation"                  = "#D55E00"
-)
-
-base_theme <- theme_minimal(base_size = 11) +
-  theme(
-    legend.position     = "bottom",
-    legend.title        = element_text(face = "bold"),
-    strip.text          = element_text(face = "bold"),
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot",
-    plot.subtitle       = element_text(color = "grey40", size = 9),
-    panel.grid.minor    = element_blank()
-  )
-
-# ---- Shared mean + SE summaries ----
-means_trt_nobs <- all_df_gamma |>
-  group_by(Treatment, N) |>
-  summarise(
-    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
-    se_bias   = sd(abs_bias, na.rm = TRUE) / sqrt(n()),
-    .groups   = "drop"
-  )
-
-means_trt_prop <- all_df_gamma |>
-  group_by(Treatment, Proportion) |>
-  summarise(
-    mean_bias = mean(bias, na.rm = TRUE),
-    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
-    .groups   = "drop"
-  )
-
-# 
-# MEANS-ONLY INTERACTION PLOTS
-# 
-
-# ---- Means-only: faceted by treatment ----
-
-plot_means_trt_nobs_facet <- means_trt_nobs |>
-  ggplot(aes(x = N, y = mean_bias, group = 1)) +
-  geom_hline(yintercept = 0, linetype = "dashed",
-             color = "grey30", linewidth = 0.4) +
-  geom_line(linewidth = 0.9, color = "steelblue") +
-  geom_errorbar(
-    aes(ymin = mean_bias - 1.96*se_bias,
-        ymax = mean_bias + 1.96*se_bias),
-    width = 0.15, linewidth = 0.6, color = "steelblue"
-  ) +
-  geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ Treatment, nrow = 1,
-             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
-  labs(
-    title    = "Gamma Interaction Bias: Treatment × Sample Size",
-    subtitle = expression(paste(
-      "Type III F(8) = 3.50, p < .001, ", eta[p]^2,
-      " = .0004 (negligible). Means ± 95% CI.")),
-    x = "Sample size (N obs)",
-    y = "Mean bias"
-  ) +
-  base_theme +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_means_trt_prop_facet <- means_trt_prop |>
-  ggplot(aes(x = Proportion, y = mean_bias, group = 1)) +
-  geom_hline(yintercept = 0, linetype = "dashed",
-             color = "grey30", linewidth = 0.4) +
-  geom_line(linewidth = 0.9, color = "steelblue") +
-  geom_errorbar(
-    aes(ymin = mean_bias - 1.96*se_bias,
-        ymax = mean_bias + 1.96*se_bias),
-    width = 0.15, linewidth = 0.6, color = "steelblue"
-  ) +
-  geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ Treatment, nrow = 1,
-             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
-  labs(
-    title    = "Gamma Interaction Bias: Treatment × Proportion Extreme",
-    subtitle = expression(paste(
-      "Type III F(8) = 22.52, p < .001, ", eta[p]^2,
-      " = .0027 (negligible). Means ± 95% CI.")),
-    x = "Proportion of extreme values",
-    y = "Mean bias"
-  ) +
-  base_theme +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_means_trt_nobs_facet
-plot_means_trt_prop_facet
-
-ggsave(here::here(paste0("figures/anova_means_trt_nobs_facet_", dt, ".png")),
-       plot_means_trt_nobs_facet, width = 13, height = 5, dpi = 300)
-ggsave(here::here(paste0("figures/anova_means_trt_prop_facet_", dt, ".png")),
-       plot_means_trt_prop_facet, width = 13, height = 5, dpi = 300)
-```  
 
 
-
-```{r bias_es}
+```{r g_absbias_es}
 
 plot_data <- type3_df |>
   left_join(eta2_reg_df, by = c("Term" = "Parameter")) |>
@@ -1257,6 +1154,105 @@ ggsave(
 )
 
 ```    
+
+```{r g_absbias_sigplots}
+# ── Shared color scale and theme ──────────────────────────────────────────────
+trt_colors <- c(
+  "No treatment"                = "#0072B2",
+  "Top-coding"                  = "#E69F00",
+  "Mean-preserved top-coding"   = "#009E73",
+  "Median-preserved top-coding" = "#CC79A7",
+  "Truncation"                  = "#D55E00"
+)
+
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    legend.position     = "bottom",
+    legend.title        = element_text(face = "bold"),
+    strip.text          = element_text(face = "bold"),
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    plot.subtitle       = element_text(color = "grey40", size = 9),
+    panel.grid.minor    = element_blank()
+  )
+
+# ── 3-way summaries ─
+means_trt_nobs_prop <- all_df_gamma |>
+  group_by(Treatment, N, Proportion) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    se_bias       = sd(abs_bias, na.rm = TRUE) / sqrt(n()),
+    .groups       = "drop"
+  )
+
+means_trt_nobs_mag <- all_df_gamma |>
+  group_by(Treatment, N, Magnitude) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    se_bias       = sd(abs_bias, na.rm = TRUE) / sqrt(n()),
+    .groups       = "drop"
+  )
+
+n_labeller <- labeller(N = function(x) paste0("N = ", x))
+
+# ── Treatment × N × Proportion ─
+plot_3way_trt_nobs_prop <- means_trt_nobs_prop |>
+  ggplot(aes(x = Proportion, y = mean_abs_bias,
+             group = Treatment, color = Treatment)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9) +
+  geom_errorbar(
+    aes(ymin = mean_abs_bias - 1.96*se_bias,
+        ymax = mean_abs_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6
+  ) +
+  geom_point(size = 3.5, shape = 18) +
+  facet_wrap(~ N, nrow = 1, labeller = n_labeller)+
+  scale_color_manual(name = "Treatment", values = trt_colors) +
+  labs(
+    title    = "Gamma Interaction Absolute Bias: Treatment × N × Proportion Extreme",
+    subtitle = "Type III 3-way interaction. Means ± 95% CI. Facets = sample size.",
+    x        = "Proportion of extreme values",
+    y        = "Mean absolute bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ── Treatment × N × Magnitude ────────────────────────────────────────────────
+plot_3way_trt_nobs_mag <- means_trt_nobs_mag |>
+  ggplot(aes(x = Magnitude, y = mean_abs_bias,
+             group = Treatment, color = Treatment)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9) +
+  geom_errorbar(
+    aes(ymin = mean_abs_bias - 1.96*se_bias,
+        ymax = mean_abs_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6
+  ) +
+  geom_point(size = 3.5, shape = 18) +
+  facet_wrap(~ N, nrow = 1, labeller = n_labeller)+
+  scale_color_manual(name = "Treatment", values = trt_colors) +
+  labs(
+    title    = "Gamma Interaction Absolute Bias: Treatment × N × Magnitude",
+    subtitle = "Type III 3-way interaction. Means ± 95% CI. Facets = sample size.",
+    x        = "Magnitude level",
+    y        = "Mean absolute bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_3way_trt_nobs_prop
+plot_3way_trt_nobs_mag
+
+ggsave(here::here(paste0("figures/anova_3way_trt_nobs_prop_", dt, ".png")),
+       plot_3way_trt_nobs_prop, width = 13, height = 5, dpi = 300)
+ggsave(here::here(paste0("figures/anova_3way_trt_nobs_mag_", dt, ".png")),
+       plot_3way_trt_nobs_mag, width = 13, height = 5, dpi = 300)
+```  
+
+
 
 
 ## ESE   
@@ -2099,7 +2095,12 @@ ggsave(
   here::here(paste0("figures/att_bias_distribution_", dt, ".png")),
   plot_att_bias_dist, width = 14, height = 20, dpi = 300
 )
+```  
+
+```{r att_absbias_dist}
+
 ```
+
 
 
 
