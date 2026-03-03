@@ -2099,6 +2099,53 @@ ggsave(
 
 ```{r att_absbias_dist}
 
+plot_att_absbias_dist <- all_df_att |>
+  mutate(
+    treatment_fct = factor(Treatment, levels = rev(c(
+      "No treatment",
+      "Top-coding",
+      "Mean-preserved top-coding",
+      "Median-preserved top-coding",
+      "Truncation"
+    )))
+  ) |>
+  mutate(dist_from_zero = abs(bias)) |>
+  ggplot(aes(x = abs_bias, y = Treatment, color = dist_from_zero)) +
+  geom_jitter(height = 0.2, size = 1.2, alpha = 0.4) +
+  stat_summary(
+    fun = mean, geom = "point", shape = "|",
+    size = 3, color = "goldenrod"
+  ) +
+  # geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  scale_color_gradient(low = "steelblue", high = "red", name = "Distance from 0") +
+  facet_grid(N + Magnitude ~ Proportion,
+             labeller = labeller(
+               N        = function(x) paste0("N=", x),
+               Proportion = function(x) paste0("Prop=", x),
+               Magnitude   = function(x) paste0("Mag=", x)
+             )) +
+  labs(
+    title    = "Distribution of ATT Absolute Bias by Data Treatment and Condition",
+    subtitle = "Each point = one replication; gold bar = mean",
+    x        = "Absolute Bias (|ATT hat - ATT true|)",
+    y        = "Data treatment method"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text          = element_text(face = "bold", size = 7),
+    legend.position     = "none",
+    plot.margin         = margin(t = 5, r = 40, b = 5, l = 5, unit = "pt")
+  ) +
+  coord_cartesian(clip = "off")
+
+plot_att_absbias_dist
+
+ggsave(
+  here::here(paste0("figures/att_absbias_distribution_", dt, ".png")),
+  plot_att_absbias_dist, width = 14, height = 20, dpi = 300
+)
 ```
 
 
