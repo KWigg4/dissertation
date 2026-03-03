@@ -505,6 +505,7 @@ tbl_bias_overall <- all_df_gamma %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
+    abs_mean_bias    = mean(abs(bias), na.rm=TRUE),
     sd_bias          = sd(bias, na.rm = TRUE),
     var_bias         = var(bias, na.rm=TRUE),
     median_bias      = median(bias, na.rm = TRUE),
@@ -529,6 +530,7 @@ tbl_bias_treatment <- all_df_gamma %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
+    mean_abs_bias    = mean(abs(bias), na.rm=TRUE),
     sd_bias          = sd(bias, na.rm = TRUE),
     median_bias      = median(bias, na.rm = TRUE),
     mad_bias         = mad(bias, na.rm = TRUE),
@@ -551,6 +553,7 @@ tbl_bias_scen <- all_df_gamma %>%
   dplyr::summarise(
     scenarios        = dplyr::n(),
     mean_bias        = mean(bias, na.rm = TRUE),
+    mean_abs_bias    = mean(abs(bias), na.rm = TRUE),
     sd_bias          = sd(bias, na.rm = TRUE),
     median_bias      = median(bias, na.rm = TRUE),
     mad_bias         = mad(bias, na.rm = TRUE),
@@ -559,7 +562,6 @@ tbl_bias_scen <- all_df_gamma %>%
     q3_bias          = q_fun(bias, 0.75),
     iqr_bias         = q3_bias - q1_bias,
     max_bias         = max(bias, na.rm = TRUE),
-    mean_abs_bias    = mean(abs(bias), na.rm = TRUE),
     share_bias_neg   = mean(bias < 0, na.rm = TRUE),
     share_bias_pos   = mean(bias > 0, na.rm = TRUE),
     .groups = "drop"
@@ -867,9 +869,9 @@ ggsave(here::here(paste0("figures/gamma_bias_trends_", dt, ".png")),
 
 ```  
 
-#### plot dist
+#### plot dist, est bias  
 
-```{r}
+```{r plot_est_dist}
 plot_est_dist <- all_df_gamma |>
   mutate(
     Magnitude = factor(Magnitude),
@@ -918,8 +920,453 @@ ggsave(
   here::here(paste0("figures/gamma_est_distribution_", dt, ".png")),
   plot_est_dist, width = 14, height = 20, dpi = 300
 )
+```  
+
+```{r plot_absbias_dist}
+plot_gamma_absbias <- all_df_gamma |>
+  mutate(
+    Magnitude = factor(Magnitude),
+    Treatment = factor(Treatment, levels = rev(c(
+      "No treatment",
+      "Top-coding",
+      "Mean-preserved top-coding",
+      "Median-preserved top-coding",
+      "Truncation"
+    )))
+  ) |>
+  mutate(dist_from_zero = abs(est)) |>
+  ggplot(aes(x = abs_bias, y = Treatment, color = dist_from_zero)) +
+  geom_jitter(height = 0.2, size = 1.2, alpha = 0.4) +
+  stat_summary(
+    fun = mean, geom = "point", shape = "|",
+    size = 5, color = "goldenrod"
+  ) +
+  #geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  scale_color_gradient(low = "steelblue", high = "red", name = "Distance from 0") +
+  facet_grid(N + Magnitude ~ Proportion,
+             labeller = labeller(
+               N          = function(x) paste0("N=", x),
+               Proportion = function(x) paste0("Prop=", x),
+               Magnitude  = function(x) paste0("Mag=", x)
+             )) +
+  labs(
+    title    = "Distribution of Gamma Interaction Absolute Bias by Treatment and Scenario",
+    subtitle = "Each point = one replication; gold bar = mean",
+    x        = "Estimate",
+    y        = "Data treatment method"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.title.position = "plot",
+    strip.text = element_text(face = "bold", size = 7),
+    legend.position = "none",
+    plot.margin = margin(t=5, r=40, b=5, l=5, unit="pt")
+  )+
+  coord_cartesian(clip="off")
+
+plot_gamma_absbias
+
+ggsave(
+  here::here(paste0("figures/gamma_est_distribution_", dt, ".png")),
+  plot_absbias_dist, width = 14, height = 20, dpi = 300
+)
 ```
 
+### ANOVA gamma abs bias  
+
+
+```{r aov_bias}
+# Type III ANOVA with Eta² and Partial Eta² for Gamma Bias
+
+# A) factorial ANOVA on gamma bias (at rep-level, per meeting with Tsai)
+# Load required packages
+pacman::p_load(car, effectsize, dplyr, tibble, knitr, kableExtra)
+
+# Ensure factors are properly set
+
+# Set contrasts for Type III SS (m!)
+options(contrasts = c("contr.sum", "contr.poly"))
+
+
+# 1: Fit the model
+
+model <- aov(
+  bias ~ Treatment * N * Proportion * Magnitude, 
+  data = all_df_gamma)
+
+
+# Step 2: Type III Sum of Squares ANOVA Table
+type3_anova <- car::Anova(model, type = "III")
+
+
+# 3: Comb. table
+# Type III SS + Effect Sizes
+
+# Extract Type III results
+type3_df <- type3_anova %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("Term") %>%
+  filter(Term != "Residuals")
+
+eta2_regular <- effectsize::eta_squared(type3_anova, partial=FALSE)
+eta2_partial <- effectsize::eta_squared(type3_anova, partial=TRUE)
+
+# Extract regular eta²
+eta2_reg_df <- eta2_regular %>%
+  as.data.frame() %>%
+  select(Parameter, Eta2)
+
+# Extract partial eta²
+eta2_part_df <- eta2_partial %>%
+  as.data.frame() %>%
+  select(Parameter, Eta2_partial)
+
+# Tried both of these below, came out the same.
+# eta2_lsr <- lsr::etaSquared(model, type=3)
+# eta2_descTools <- DescTools::EtaSq(model, type=3)
+
+# Combine everything - simplified version (point estimates only)
+combined_table <- type3_df %>%
+  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
+  left_join(eta2_part_df, by = c("Term" = "Parameter")) %>%
+  mutate(
+    `Sum Sq` = round(`Sum Sq`, 6),
+    `F value` = round(`F value`, 2),
+    `Pr(>F)` = format.pval(`Pr(>F)`, digits = 3, eps = 0.001),
+    Eta2 = round(Eta2, 5),
+    Eta2_partial = round(Eta2_partial, 5),
+    # Add interpretation column (handle NAs for intercept)
+    Interpretation = case_when(
+      is.na(Eta2_partial) ~ "N/A",           # Handle NAs first
+      Eta2_partial < 0.01 ~ "Trivial",
+      Eta2_partial < 0.06 ~ "Small",
+      Eta2_partial < 0.14 ~ "Medium",
+      TRUE ~ "Large"
+    )
+  ) %>%
+  select(Term, Df, `Sum Sq`, `F value`, `Pr(>F)`, Eta2, Eta2_partial, Interpretation) %>%
+  arrange(desc(`F value`))
+
+print(combined_table)
+
+# 4: Export
+write.csv(combined_table, 
+          here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
+          row.names = FALSE)
+
+
+# id sig, large es
+# Identify Significant Effects and Large Effect Sizes
+
+significant_effects <- combined_table %>%
+  filter(Term != "(Intercept)") %>%  # Exclude intercept
+  filter(`Pr(>F)` < 0.001 | `Pr(>F)` == "<.001") %>%
+  arrange(desc(Eta2_partial))
+
+cat("\n=== SIGNIFICANT EFFECTS (p < .001) ===\n")
+print(significant_effects)
+
+large_effects <- combined_table %>%
+  filter(Term != "(Intercept)") %>%  # Exclude intercept
+  filter(Eta2_partial >= 0.01) %>%  # At least "small" effects
+  arrange(desc(Eta2_partial))
+
+cat("\n=== SMALL OR LARGER EFFECT SIZES (η²p ≥ .01) ===\n")
+print(large_effects)
+
+# 8: Summary stats
+
+# Exclude intercept for summary
+combined_no_int <- combined_table %>% filter(Term != "(Intercept)")
+
+cat("\n=== SUMMARY ===\n")
+cat("Total effects tested:", nrow(combined_no_int), "\n")
+cat("Significant at p < .001:", 
+    sum(grepl("<.001", combined_no_int$`Pr(>F)`)), "\n")
+cat("Significant at p < .05:", 
+    sum(as.numeric(gsub("<.001", "0", combined_no_int$`Pr(>F)`)) < 0.05, na.rm = TRUE), "\n")
+cat("Small+ effect sizes (η²p ≥ .01):", 
+    sum(combined_no_int$Eta2_partial >= 0.01, na.rm = TRUE), "\n")
+cat("Largest partial eta²:", 
+    round(max(combined_no_int$Eta2_partial, na.rm = TRUE), 5), 
+    "for", combined_no_int$Term[which.max(combined_no_int$Eta2_partial)], "\n")
+
+# Summary interpretation
+cat("\n=== INTERPRETATION ===\n")
+cat("Mean bias across all conditions:", round(mean(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
+cat("SD of bias:", round(sd(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
+cat("Range of bias:", round(range(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
+cat("\nAll effect sizes are negligible (< .01), indicating that treatment method,\n")
+cat("sample size, proportion of extremes, and magnitude have minimal practical\n")
+cat("impact on bias. The vast majority of variance in bias (>99%) is due to\n")
+cat("random sampling variability, not systematic differences between conditions.\n")
+
+# Opt: Post hocs 
+# OPTIONAL: Post-hoc tests for significant main effects
+
+# library(emmeans)
+# 
+# # Only run post-hoc if effect is significant AND at least small
+# sig_main_effects <- significant_effects %>%
+#   filter(!grepl(":", Term)) %>%  # Only main effects, not interactions
+#   filter(Eta2_partial >= 0.001)  # At least 0.1% variance explained
+# 
+# if ("treatment" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Treatment ===\n")
+#   emm_treatment <- emmeans(model, ~ treatment)
+#   pairs_treatment <- pairs(emm_treatment, adjust = "tukey")
+#   print(pairs_treatment)
+#   
+#   # Save post-hoc results
+#   write.csv(as.data.frame(pairs_treatment),
+#             file = paste0("results/posthoc_treatment_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# if ("prop_extreme" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Proportion Extreme ===\n")
+#   emm_prop <- emmeans(model, ~ prop_extreme)
+#   pairs_prop <- pairs(emm_prop, adjust = "tukey")
+#   print(pairs_prop)
+#   
+#   write.csv(as.data.frame(pairs_prop),
+#             file = paste0("results/posthoc_prop_extreme_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# if ("magnitude_level" %in% sig_main_effects$Term) {
+#   cat("\n=== POST-HOC: Pairwise Comparisons for Magnitude Level ===\n")
+#   emm_mag <- emmeans(model, ~ magnitude_level)
+#   pairs_mag <- pairs(emm_mag, adjust = "tukey")
+#   print(pairs_mag)
+#   
+#   write.csv(as.data.frame(pairs_mag),
+#             file = paste0("results/posthoc_magnitude_", dt, ".csv"),
+#             row.names = FALSE)
+# }
+# 
+# # Opt: Check assumptions 
+# # OPTIONAL: Check ANOVA assumptions
+# 
+# cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
+# 
+# # 1. Normality of residuals (sample if too large)
+# if (nrow(all_df_gamma) > 5000) {
+#   shapiro_test <- shapiro.test(sample(residuals(model), 5000))
+#   cat("Shapiro-Wilk test for normality (n=5000 sample): W =", 
+#       round(shapiro_test$statistic, 4), 
+#       ", p =", format.pval(shapiro_test$p.value), "\n")
+# } else {
+#   shapiro_test <- shapiro.test(residuals(model))
+#   cat("Shapiro-Wilk test for normality: W =", 
+#       round(shapiro_test$statistic, 4), 
+#       ", p =", format.pval(shapiro_test$p.value), "\n")
+# }
+# 
+# # 2. Homogeneity of variance (Levene's test)
+# levene_test <- car::leveneTest(bias ~ treatment * n * prop_extreme * magnitude_level, 
+#                                data = all_df_gamma)
+# cat("Levene's test for homogeneity: F =", round(levene_test$`F value`[1], 4),
+#     ", p =", format.pval(levene_test$`Pr(>F)`[1]), "\n")
+# 
+# # 3. Diagnostic plots
+# png(paste0("figures/anova_diagnostics_", dt, ".png"), 
+#     width = 10, height = 8, units = "in", res = 300)
+# par(mfrow = c(2, 2))
+# plot(model)
+# dev.off()
+
+# cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
+
+# Plot significant interactions: 
+# --- Shared theme and color scale for both plots ---
+trt_colors <- c(
+  "No treatment"                = "#0072B2",
+  "Top-coding"                  = "#E69F00",
+  "Mean-preserved top-coding"   = "#009E73",
+  "Median-preserved top-coding" = "#CC79A7",
+  "Truncation"                  = "#D55E00"
+)
+
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    legend.position     = "bottom",
+    legend.title        = element_text(face = "bold"),
+    strip.text          = element_text(face = "bold"),
+    plot.title          = element_text(face = "bold"),
+    plot.title.position = "plot",
+    plot.subtitle       = element_text(color = "grey40", size = 9),
+    panel.grid.minor    = element_blank()
+  )
+
+# ---- Shared mean + SE summaries ----
+means_trt_nobs <- all_df_gamma |>
+  group_by(Treatment, N) |>
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
+    .groups   = "drop"
+  )
+
+means_trt_prop <- all_df_gamma |>
+  group_by(Treatment, Proportion) |>
+  summarise(
+    mean_bias = mean(bias, na.rm = TRUE),
+    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
+    .groups   = "drop"
+  )
+
+# 
+# MEANS-ONLY INTERACTION PLOTS
+# 
+
+# ---- Means-only: faceted by treatment ----
+
+plot_means_trt_nobs_facet <- means_trt_nobs |>
+  ggplot(aes(x = N, y = mean_bias, group = 1)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  geom_errorbar(
+    aes(ymin = mean_bias - 1.96*se_bias,
+        ymax = mean_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6, color = "steelblue"
+  ) +
+  geom_point(size = 3.5, shape = 18, color = "steelblue") +
+  facet_wrap(~ Treatment, nrow = 1,
+             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
+  labs(
+    title    = "Gamma Interaction Bias: Treatment × Sample Size",
+    subtitle = expression(paste(
+      "Type III F(8) = 3.50, p < .001, ", eta[p]^2,
+      " = .0004 (negligible). Means ± 95% CI.")),
+    x = "Sample size (N obs)",
+    y = "Mean bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_means_trt_prop_facet <- means_trt_prop |>
+  ggplot(aes(x = Proportion, y = mean_bias, group = 1)) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "grey30", linewidth = 0.4) +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  geom_errorbar(
+    aes(ymin = mean_bias - 1.96*se_bias,
+        ymax = mean_bias + 1.96*se_bias),
+    width = 0.15, linewidth = 0.6, color = "steelblue"
+  ) +
+  geom_point(size = 3.5, shape = 18, color = "steelblue") +
+  facet_wrap(~ Treatment, nrow = 1,
+             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
+  labs(
+    title    = "Gamma Interaction Bias: Treatment × Proportion Extreme",
+    subtitle = expression(paste(
+      "Type III F(8) = 22.52, p < .001, ", eta[p]^2,
+      " = .0027 (negligible). Means ± 95% CI.")),
+    x = "Proportion of extreme values",
+    y = "Mean bias"
+  ) +
+  base_theme +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_means_trt_nobs_facet
+plot_means_trt_prop_facet
+
+ggsave(here::here(paste0("figures/anova_means_trt_nobs_facet_", dt, ".png")),
+       plot_means_trt_nobs_facet, width = 13, height = 5, dpi = 300)
+ggsave(here::here(paste0("figures/anova_means_trt_prop_facet_", dt, ".png")),
+       plot_means_trt_prop_facet, width = 13, height = 5, dpi = 300)
+```  
+
+
+
+```{r bias_es}
+
+# Need to go back to BEFORE formatting p-values
+plot_data <- type3_df %>%
+  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
+  filter(Term != "(Intercept)") %>%
+  filter(`Pr(>F)` < 0.05) %>%  # Use numeric p-values BEFORE formatting
+  mutate(
+    Term = reorder(Term, Eta2),
+    Significant = case_when(
+      `Pr(>F)` < 0.001 ~ "p < .001",
+      `Pr(>F)` < 0.01 ~ "p < .01",
+      `Pr(>F)` < 0.05 ~ "p < .05",
+      TRUE ~ "ns"
+    )
+  )
+
+library(patchwork)  # For combining plots
+
+p_zoomed <- ggplot(
+  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue", 
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
+    name = "Significance"
+  ) +
+  labs(title = "A) Zoomed View", x = "η²", y = "Effect") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+p_full <- ggplot(
+  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
+  geom_col() +
+  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red",    alpha = 0.7) +
+  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
+  geom_vline(xintercept = 0.14, linetype = "dashed", color = "darkgreen", 
+             alpha = 0.7) +
+  annotate("text", x = 0.01, y = 0.5, label = "Small", size = 3, color = "red",
+           vjust = 0, hjust = -0.1) +
+  annotate("text", x = 0.06, y = 0.5, label = "Med",   size = 3, color = "orange", 
+           vjust = 0, hjust = -0.1) +
+  annotate("text", x = 0.14, y = 0.5, label = "Large", size = 3, color = "darkgreen",
+           vjust = 0, hjust = -0.1) +
+  scale_fill_manual(
+    values = c("p < .001" = "steelblue", 
+               "p < .01"  = "cornflowerblue",
+               "p < .05"  = "lightblue"),
+    name = "Significance"
+  ) +
+  scale_x_continuous(limits = c(0, 0.20), breaks = seq(0, 0.15, 0.03)) +
+  labs(title = "B) Full Scale (with benchmarks)", x = "η²", y = NULL) +
+  theme_minimal() +
+  theme(
+    axis.text.y     = element_blank(),
+    legend.position = "bottom",
+    plot.margin     = margin(t = 5, r = 5, b = 5, l = 5, unit = "pt")
+  )
+
+p_combined <- p_zoomed + p_full +
+  guide_area() +
+  plot_layout(ncol = 2, nrow = 2, guides = "collect",
+              design = "AB
+                        CC",
+              heights = c(1, 0.05)) +
+  plot_annotation(
+    title    = "Eta-Squared for Significant Effects: Gamma Model Bias",
+    subtitle = "All effects are trivial - even the largest (0.003) is far below the 'small' benchmark (0.01)"
+  )
+
+print(p_combined)
+
+ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
+       p_combined, width = 14, height = 6, dpi = 300)
+
+
+ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
+       p_combined, width = 14, height = 6, dpi = 300)
+
+ggsave(here::here(paste0("figures/effect_sizes_", dt, ".png")),
+       p_effect_sizes, width = 10, height = 6, dpi = 300)
+
+
+```    
 
 
 ## ESE   
@@ -1766,401 +2213,7 @@ ggsave(
 
 
 
-##4 FULL-FACTORIAL ANOVA (RQ answers)
-
-
-
-```{r aov_bias}
-# Type III ANOVA with Eta² and Partial Eta² for Gamma Bias
-
-# A) factorial ANOVA on gamma bias (at rep-level, per meeting with Tsai)
-# Load required packages
-pacman::p_load(car, effectsize, dplyr, tibble, knitr, kableExtra)
-
-# Ensure factors are properly set
-
-# Set contrasts for Type III SS (m!)
-options(contrasts = c("contr.sum", "contr.poly"))
-
-
-# 1: Fit the model
-
-model <- aov(
-  bias ~ Treatment * N * Proportion * Magnitude, 
-  data = all_df_gamma)
-
-
-# Step 2: Type III Sum of Squares ANOVA Table
-type3_anova <- car::Anova(model, type = "III")
-
-
-# 3: Comb. table
-# Type III SS + Effect Sizes
-
-# Extract Type III results
-type3_df <- type3_anova %>%
-  as.data.frame() %>%
-  tibble::rownames_to_column("Term") %>%
-  filter(Term != "Residuals")
-
-eta2_regular <- effectsize::eta_squared(type3_anova, partial=FALSE)
-eta2_partial <- effectsize::eta_squared(type3_anova, partial=TRUE)
-
-# Extract regular eta²
-eta2_reg_df <- eta2_regular %>%
-  as.data.frame() %>%
-  select(Parameter, Eta2)
-
-# Extract partial eta²
-eta2_part_df <- eta2_partial %>%
-  as.data.frame() %>%
-  select(Parameter, Eta2_partial)
-
-# Tried both of these below, came out the same.
-# eta2_lsr <- lsr::etaSquared(model, type=3)
-# eta2_descTools <- DescTools::EtaSq(model, type=3)
-
-# Combine everything - simplified version (point estimates only)
-combined_table <- type3_df %>%
-  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
-  left_join(eta2_part_df, by = c("Term" = "Parameter")) %>%
-  mutate(
-    `Sum Sq` = round(`Sum Sq`, 6),
-    `F value` = round(`F value`, 2),
-    `Pr(>F)` = format.pval(`Pr(>F)`, digits = 3, eps = 0.001),
-    Eta2 = round(Eta2, 5),
-    Eta2_partial = round(Eta2_partial, 5),
-    # Add interpretation column (handle NAs for intercept)
-    Interpretation = case_when(
-      is.na(Eta2_partial) ~ "N/A",           # Handle NAs first
-      Eta2_partial < 0.01 ~ "Trivial",
-      Eta2_partial < 0.06 ~ "Small",
-      Eta2_partial < 0.14 ~ "Medium",
-      TRUE ~ "Large"
-    )
-  ) %>%
-  select(Term, Df, `Sum Sq`, `F value`, `Pr(>F)`, Eta2, Eta2_partial, Interpretation) %>%
-  arrange(desc(`F value`))
-
-print(combined_table)
-
-# 4: Export
-write.csv(combined_table, 
-          here::here(paste0("results/aov_bias_type3_", dt, ".csv")),
-          row.names = FALSE)
-
-
-# id sig, large es
-# Identify Significant Effects and Large Effect Sizes
-
-significant_effects <- combined_table %>%
-  filter(Term != "(Intercept)") %>%  # Exclude intercept
-  filter(`Pr(>F)` < 0.001 | `Pr(>F)` == "<.001") %>%
-  arrange(desc(Eta2_partial))
-
-cat("\n=== SIGNIFICANT EFFECTS (p < .001) ===\n")
-print(significant_effects)
-
-large_effects <- combined_table %>%
-  filter(Term != "(Intercept)") %>%  # Exclude intercept
-  filter(Eta2_partial >= 0.01) %>%  # At least "small" effects
-  arrange(desc(Eta2_partial))
-
-cat("\n=== SMALL OR LARGER EFFECT SIZES (η²p ≥ .01) ===\n")
-print(large_effects)
-
-# 8: Summary stats
-
-# Exclude intercept for summary
-combined_no_int <- combined_table %>% filter(Term != "(Intercept)")
-
-cat("\n=== SUMMARY ===\n")
-cat("Total effects tested:", nrow(combined_no_int), "\n")
-cat("Significant at p < .001:", 
-    sum(grepl("<.001", combined_no_int$`Pr(>F)`)), "\n")
-cat("Significant at p < .05:", 
-    sum(as.numeric(gsub("<.001", "0", combined_no_int$`Pr(>F)`)) < 0.05, na.rm = TRUE), "\n")
-cat("Small+ effect sizes (η²p ≥ .01):", 
-    sum(combined_no_int$Eta2_partial >= 0.01, na.rm = TRUE), "\n")
-cat("Largest partial eta²:", 
-    round(max(combined_no_int$Eta2_partial, na.rm = TRUE), 5), 
-    "for", combined_no_int$Term[which.max(combined_no_int$Eta2_partial)], "\n")
-
-# Summary interpretation
-cat("\n=== INTERPRETATION ===\n")
-cat("Mean bias across all conditions:", round(mean(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
-cat("SD of bias:", round(sd(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
-cat("Range of bias:", round(range(all_df_gamma$bias, na.rm = TRUE), 4), "\n")
-cat("\nAll effect sizes are negligible (< .01), indicating that treatment method,\n")
-cat("sample size, proportion of extremes, and magnitude have minimal practical\n")
-cat("impact on bias. The vast majority of variance in bias (>99%) is due to\n")
-cat("random sampling variability, not systematic differences between conditions.\n")
-
-# Opt: Post hocs 
-# OPTIONAL: Post-hoc tests for significant main effects
-
-# library(emmeans)
-# 
-# # Only run post-hoc if effect is significant AND at least small
-# sig_main_effects <- significant_effects %>%
-#   filter(!grepl(":", Term)) %>%  # Only main effects, not interactions
-#   filter(Eta2_partial >= 0.001)  # At least 0.1% variance explained
-# 
-# if ("treatment" %in% sig_main_effects$Term) {
-#   cat("\n=== POST-HOC: Pairwise Comparisons for Treatment ===\n")
-#   emm_treatment <- emmeans(model, ~ treatment)
-#   pairs_treatment <- pairs(emm_treatment, adjust = "tukey")
-#   print(pairs_treatment)
-#   
-#   # Save post-hoc results
-#   write.csv(as.data.frame(pairs_treatment),
-#             file = paste0("results/posthoc_treatment_", dt, ".csv"),
-#             row.names = FALSE)
-# }
-# 
-# if ("prop_extreme" %in% sig_main_effects$Term) {
-#   cat("\n=== POST-HOC: Pairwise Comparisons for Proportion Extreme ===\n")
-#   emm_prop <- emmeans(model, ~ prop_extreme)
-#   pairs_prop <- pairs(emm_prop, adjust = "tukey")
-#   print(pairs_prop)
-#   
-#   write.csv(as.data.frame(pairs_prop),
-#             file = paste0("results/posthoc_prop_extreme_", dt, ".csv"),
-#             row.names = FALSE)
-# }
-# 
-# if ("magnitude_level" %in% sig_main_effects$Term) {
-#   cat("\n=== POST-HOC: Pairwise Comparisons for Magnitude Level ===\n")
-#   emm_mag <- emmeans(model, ~ magnitude_level)
-#   pairs_mag <- pairs(emm_mag, adjust = "tukey")
-#   print(pairs_mag)
-#   
-#   write.csv(as.data.frame(pairs_mag),
-#             file = paste0("results/posthoc_magnitude_", dt, ".csv"),
-#             row.names = FALSE)
-# }
-# 
-# # Opt: Check assumptions 
-# # OPTIONAL: Check ANOVA assumptions
-# 
-# cat("\n=== CHECKING ANOVA ASSUMPTIONS ===\n")
-# 
-# # 1. Normality of residuals (sample if too large)
-# if (nrow(all_df_gamma) > 5000) {
-#   shapiro_test <- shapiro.test(sample(residuals(model), 5000))
-#   cat("Shapiro-Wilk test for normality (n=5000 sample): W =", 
-#       round(shapiro_test$statistic, 4), 
-#       ", p =", format.pval(shapiro_test$p.value), "\n")
-# } else {
-#   shapiro_test <- shapiro.test(residuals(model))
-#   cat("Shapiro-Wilk test for normality: W =", 
-#       round(shapiro_test$statistic, 4), 
-#       ", p =", format.pval(shapiro_test$p.value), "\n")
-# }
-# 
-# # 2. Homogeneity of variance (Levene's test)
-# levene_test <- car::leveneTest(bias ~ treatment * n * prop_extreme * magnitude_level, 
-#                                data = all_df_gamma)
-# cat("Levene's test for homogeneity: F =", round(levene_test$`F value`[1], 4),
-#     ", p =", format.pval(levene_test$`Pr(>F)`[1]), "\n")
-# 
-# # 3. Diagnostic plots
-# png(paste0("figures/anova_diagnostics_", dt, ".png"), 
-#     width = 10, height = 8, units = "in", res = 300)
-# par(mfrow = c(2, 2))
-# plot(model)
-# dev.off()
-
-# cat("Diagnostic plots saved to figures/anova_diagnostics_", dt, ".png\n")
-
-# Plot significant interactions: 
-# --- Shared theme and color scale for both plots ---
-trt_colors <- c(
-  "No treatment"                = "#0072B2",
-  "Top-coding"                  = "#E69F00",
-  "Mean-preserved top-coding"   = "#009E73",
-  "Median-preserved top-coding" = "#CC79A7",
-  "Truncation"                  = "#D55E00"
-)
-
-base_theme <- theme_minimal(base_size = 11) +
-  theme(
-    legend.position     = "bottom",
-    legend.title        = element_text(face = "bold"),
-    strip.text          = element_text(face = "bold"),
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot",
-    plot.subtitle       = element_text(color = "grey40", size = 9),
-    panel.grid.minor    = element_blank()
-  )
-
-# ---- Shared mean + SE summaries ----
-means_trt_nobs <- all_df_gamma |>
-  group_by(Treatment, N) |>
-  summarise(
-    mean_bias = mean(bias, na.rm = TRUE),
-    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
-    .groups   = "drop"
-  )
-
-means_trt_prop <- all_df_gamma |>
-  group_by(Treatment, Proportion) |>
-  summarise(
-    mean_bias = mean(bias, na.rm = TRUE),
-    se_bias   = sd(bias, na.rm = TRUE) / sqrt(n()),
-    .groups   = "drop"
-  )
-
-# 
-# MEANS-ONLY INTERACTION PLOTS
-# 
-
-# ---- Means-only: faceted by treatment ----
-
-plot_means_trt_nobs_facet <- means_trt_nobs |>
-  ggplot(aes(x = N, y = mean_bias, group = 1)) +
-  geom_hline(yintercept = 0, linetype = "dashed",
-             color = "grey30", linewidth = 0.4) +
-  geom_line(linewidth = 0.9, color = "steelblue") +
-  geom_errorbar(
-    aes(ymin = mean_bias - 1.96*se_bias,
-        ymax = mean_bias + 1.96*se_bias),
-    width = 0.15, linewidth = 0.6, color = "steelblue"
-  ) +
-  geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ Treatment, nrow = 1,
-             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
-  labs(
-    title    = "Gamma Interaction Bias: Treatment × Sample Size",
-    subtitle = expression(paste(
-      "Type III F(8) = 3.50, p < .001, ", eta[p]^2,
-      " = .0004 (negligible). Means ± 95% CI.")),
-    x = "Sample size (N obs)",
-    y = "Mean bias"
-  ) +
-  base_theme +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_means_trt_prop_facet <- means_trt_prop |>
-  ggplot(aes(x = Proportion, y = mean_bias, group = 1)) +
-  geom_hline(yintercept = 0, linetype = "dashed",
-             color = "grey30", linewidth = 0.4) +
-  geom_line(linewidth = 0.9, color = "steelblue") +
-  geom_errorbar(
-    aes(ymin = mean_bias - 1.96*se_bias,
-        ymax = mean_bias + 1.96*se_bias),
-    width = 0.15, linewidth = 0.6, color = "steelblue"
-  ) +
-  geom_point(size = 3.5, shape = 18, color = "steelblue") +
-  facet_wrap(~ Treatment, nrow = 1,
-             labeller = labeller(Treatment = label_wrap_gen(width = 15))) +
-  labs(
-    title    = "Gamma Interaction Bias: Treatment × Proportion Extreme",
-    subtitle = expression(paste(
-      "Type III F(8) = 22.52, p < .001, ", eta[p]^2,
-      " = .0027 (negligible). Means ± 95% CI.")),
-    x = "Proportion of extreme values",
-    y = "Mean bias"
-  ) +
-  base_theme +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-plot_means_trt_nobs_facet
-plot_means_trt_prop_facet
-
-ggsave(here::here(paste0("figures/anova_means_trt_nobs_facet_", dt, ".png")),
-       plot_means_trt_nobs_facet, width = 13, height = 5, dpi = 300)
-ggsave(here::here(paste0("figures/anova_means_trt_prop_facet_", dt, ".png")),
-       plot_means_trt_prop_facet, width = 13, height = 5, dpi = 300)
-```  
-
-
-
-```{r bias_es}
-
-# Need to go back to BEFORE formatting p-values
-plot_data <- type3_df %>%
-  left_join(eta2_reg_df, by = c("Term" = "Parameter")) %>%
-  filter(Term != "(Intercept)") %>%
-  filter(`Pr(>F)` < 0.05) %>%  # Use numeric p-values BEFORE formatting
-  mutate(
-    Term = reorder(Term, Eta2),
-    Significant = case_when(
-      `Pr(>F)` < 0.001 ~ "p < .001",
-      `Pr(>F)` < 0.01 ~ "p < .01",
-      `Pr(>F)` < 0.05 ~ "p < .05",
-      TRUE ~ "ns"
-    )
-  )
-
-library(patchwork)  # For combining plots
-
-p_zoomed <- ggplot(
-  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
-  geom_col() +
-  scale_fill_manual(
-    values = c("p < .001" = "steelblue", 
-               "p < .01"  = "cornflowerblue",
-               "p < .05"  = "lightblue"),
-    name = "Significance"
-  ) +
-  labs(title = "A) Zoomed View", x = "η²", y = "Effect") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-p_full <- ggplot(
-  plot_data, aes(x = Eta2, y = Term, fill = Significant)) +
-  geom_col() +
-  geom_vline(xintercept = 0.01, linetype = "dashed", color = "red",    alpha = 0.7) +
-  geom_vline(xintercept = 0.06, linetype = "dashed", color = "orange", alpha = 0.7) +
-  geom_vline(xintercept = 0.14, linetype = "dashed", color = "darkgreen", 
-             alpha = 0.7) +
-  annotate("text", x = 0.01, y = 0.5, label = "Small", size = 3, color = "red",
-           vjust = 0, hjust = -0.1) +
-  annotate("text", x = 0.06, y = 0.5, label = "Med",   size = 3, color = "orange", 
-           vjust = 0, hjust = -0.1) +
-  annotate("text", x = 0.14, y = 0.5, label = "Large", size = 3, color = "darkgreen",
-           vjust = 0, hjust = -0.1) +
-  scale_fill_manual(
-    values = c("p < .001" = "steelblue", 
-               "p < .01"  = "cornflowerblue",
-               "p < .05"  = "lightblue"),
-    name = "Significance"
-  ) +
-  scale_x_continuous(limits = c(0, 0.20), breaks = seq(0, 0.15, 0.03)) +
-  labs(title = "B) Full Scale (with benchmarks)", x = "η²", y = NULL) +
-  theme_minimal() +
-  theme(
-    axis.text.y     = element_blank(),
-    legend.position = "bottom",
-    plot.margin     = margin(t = 5, r = 5, b = 5, l = 5, unit = "pt")
-  )
-
-p_combined <- p_zoomed + p_full +
-  guide_area() +
-  plot_layout(ncol = 2, nrow = 2, guides = "collect",
-              design = "AB
-                        CC",
-              heights = c(1, 0.05)) +
-  plot_annotation(
-    title    = "Eta-Squared for Significant Effects: Gamma Model Bias",
-    subtitle = "All effects are trivial - even the largest (0.003) is far below the 'small' benchmark (0.01)"
-  )
-
-print(p_combined)
-
-ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
-       p_combined, width = 14, height = 6, dpi = 300)
-
-
-ggsave(here::here(paste0("figures/effect_sizes_combined_", dt, ".png")),
-       p_combined, width = 14, height = 6, dpi = 300)
-
-ggsave(here::here(paste0("figures/effect_sizes_", dt, ".png")),
-       p_effect_sizes, width = 10, height = 6, dpi = 300)
-
-
-```    
+## FULL-FACTORIAL ANOVA ATT ABS BIAS  
 
 
 
