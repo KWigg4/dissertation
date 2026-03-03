@@ -356,88 +356,14 @@ dat_combined <- readRDS(here::here("results/example_datasets.RDS"))
 ```{r ex_opt2}
 library(patchwork)
 
-# Left panel: zoomed in on bulk of distribution
-p_zoom <- ggplot(
-  dat_combined,
-  aes(x = prop_extreme_lbl, y = TOTEXPYY, fill = prop_extreme_lbl)
-) +
-  geom_violin(
-    trim  = FALSE,
-    alpha = 0.8,
-    color = "white"
-  ) +
-  geom_boxplot(
-    width         = 0.08,
-    fill          = "white",
-    outlier.shape = NA,
-    color         = "grey30",
-    linewidth     = 0.5
-  ) +
-  coord_cartesian(ylim = c(0, 5000)) +
-  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
-  scale_fill_manual(
-    values = c(
-      "1% Extreme"  = "#4E9ABE",
-      "5% Extreme"  = "#F4A261",
-      "10% Extreme" = "#E76F51"
-    ),
-    guide = "none"
-  ) +
-  labs(
-    title    = "A) Bulk of Distribution",
-    subtitle = "Zoomed to $0–$5K",
-    x        = NULL,
-    y        = "Total Expenditure"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title         = element_text(face = "bold"),
-    plot.subtitle      = element_text(color = "grey40"),
-    panel.grid.major.x = element_blank()
-  )
+# ── Data prep ─────────────────────────────────────────────────────────────────
+dat_example1     <- readRDS(here::here("results/example_dataset1.RDS"))
+zoom_cutoff      <- quantile(dat_example1$TOTEXPYY, 0.95)
+bulk_cut         <- 50000
+dat_combined_pos <- dat_combined |> filter(TOTEXPYY > 0)
+dat_extremes     <- dat_combined |> filter(TOTEXPYY > zoom_cutoff)
 
-library(patchwork)
-
-# Compute a zoom cutoff: just below where extremes start (q95 of prop=0.01 condition)
-dat_example1 <- readRDS(here::here("results/example_dataset1.RDS"))
-zoom_cutoff <- quantile(dat_example1$TOTEXPYY, 0.95)
-
-# --- Left panel: zoomed boxplot of bulk ---
-p_bulk <- ggplot(
-  dat_combined,
-  aes(x = prop_extreme_lbl, y = TOTEXPYY, fill = prop_extreme_lbl)
-) +
-  geom_boxplot(
-    outlier.shape = NA,   # suppress outliers — shown separately on right
-    width         = 0.5,
-    color         = "grey30",
-    linewidth     = 0.5
-  ) +
-  coord_cartesian(ylim = c(0, zoom_cutoff)) +
-  scale_y_continuous(labels = scales::dollar_format(scale = 1e-3, suffix = "K")) +
-  scale_fill_manual(
-    values = c(
-      "1% Extreme"  = "#4E9ABE",
-      "5% Extreme"  = "#F4A261",
-      "10% Extreme" = "#E76F51"
-    ),
-    guide = "none"
-  ) +
-  labs(
-    title    = "A) Bulk of Distribution",
-    subtitle = glue::glue("Zoomed to ≤ {scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')} \n(95th percentile of example 1)"),
-    x        = NULL,
-    y        = "Total Expenditure"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title         = element_text(face = "bold"),
-    plot.subtitle      = element_text(color = "grey40"),
-    panel.grid.major.x = element_blank()
-  )
-
-# --- Right panel: only extreme values ---
-# --- Precompute mean and median for extremes panel ---
+# ── Right panel from plot_twopanel: jitter of extremes by prop_extreme ────────
 dat_extremes_stats <- dat_extremes %>%
   group_by(prop_extreme_lbl) %>%
   summarise(
@@ -449,61 +375,100 @@ p_extremes <- ggplot(
   dat_extremes,
   aes(x = prop_extreme_lbl, y = TOTEXPYY, color = prop_extreme_lbl)
 ) +
-  geom_jitter(
-    width  = 0.2,
-    size   = 1.2,
-    alpha  = 0.4
-  ) +
-  # Mean line
+  geom_jitter(width = 0.2, size = 1.2, alpha = 0.4) +
   geom_crossbar(
-    data     = dat_extremes_stats,
+    data      = dat_extremes_stats,
     aes(y = mean_val, ymin = mean_val, ymax = mean_val),
-    width    = 0.4,
-    color    = "black",
-    linewidth = 0.4,
-    linetype = "solid",
-    fatten   = 0
+    width     = 0.4, color = "black", linewidth = 0.4, linetype = "solid", fatten = 0
   ) +
-  # Median line
   geom_crossbar(
-    data     = dat_extremes_stats,
+    data      = dat_extremes_stats,
     aes(y = median_val, ymin = median_val, ymax = median_val),
-    width    = 0.4,
-    color    = "black",
-    linewidth = 0.4,
-    linetype = "dashed",
-    fatten   = 0
+    width     = 0.4, color = "black", linewidth = 0.4, linetype = "dashed", fatten = 0
   ) +
   scale_y_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
   scale_color_manual(
-    values = c(
-      "1% Extreme"  = "#4E9ABE",
-      "5% Extreme"  = "#F4A261",
-      "10% Extreme" = "#E76F51"
-    ),
-    guide = "none"
+    values = c("1% Extreme" = "#4E9ABE", "5% Extreme" = "#F4A261", "10% Extreme" = "#E76F51"),
+    guide  = "none"
   ) +
   labs(
-    title    = "B) Extreme Values Only",
-    subtitle = glue::glue("Values above 95th percentile ({scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')})"),
-    caption  = "— Mean  - - Median",
+    title    = "A) Jitter of Extreme Values",
+    subtitle = NULL,
+    caption  = NULL,
     x        = NULL,
-    y        = NULL
+    y        = "Total Expenditure"
   ) +
-  theme_minimal(base_size = 13) +
+  theme_minimal(base_size = 11) +
   theme(
-    plot.title         = element_text(face = "bold"),
-    plot.subtitle      = element_text(color = "grey40"),
-    plot.caption       = element_text(color = "grey30", hjust = 0.5),
+    plot.title         = element_text(face = "plain", size = 11, hjust = 0.5),
+    axis.title         = element_text(size = 9, color = "grey40"),
+    axis.text          = element_text(size = 8),
     panel.grid.major.x = element_blank()
   )
 
-# --- Combine ---
-plot_twopanel <- patchwork::wrap_plots(p_bulk, p_extremes, ncol = 2, widths = c(1.2, 1)) +
-  plot_annotation(
-    title    = "Distribution of Total Expenditures by Proportion of Extreme Values",
-    subtitle = "Magnitude level = 1 ($50K–$1M); n = 5,000",
-    caption  = "Note: Panel A shows the bulk of the distribution (below 95th percentile).\nPanel B shows only values above the 95th percentile, illustrating how the extreme tail grows with proportion.",
+# ── Right panels from plot_hist_sixpanel: histograms of extremes by row ───────
+get_max_bin_count <- function(prop_lbl) {
+  dat <- dat_combined_pos |> filter(prop_extreme_lbl == prop_lbl, TOTEXPYY > bulk_cut)
+  h   <- ggplot_build(ggplot(dat, aes(x = TOTEXPYY)) + geom_histogram(bins = 60))
+  max(h$data[[1]]$count, na.rm = TRUE)
+}
+right_max_count <- get_max_bin_count("10% Extreme")
+
+make_hist_right <- function(prop_lbl, show_x, show_y, title = NULL) {
+  fill_col <- c(
+    "1% Extreme"  = "#4E9ABE",
+    "5% Extreme"  = "#F4A261",
+    "10% Extreme" = "#E76F51"
+  )[prop_lbl]
+
+  dat        <- dat_combined_pos |> filter(prop_extreme_lbl == prop_lbl, TOTEXPYY > bulk_cut)
+  mean_val   <- mean(dat$TOTEXPYY,   na.rm = TRUE)
+  median_val <- median(dat$TOTEXPYY, na.rm = TRUE)
+
+  ggplot(dat, aes(x = TOTEXPYY)) +
+    geom_histogram(bins = 60, fill = fill_col, color = "white", linewidth = 0.2) +
+    geom_vline(xintercept = mean_val,   color = "black", linewidth = 0.4, linetype = "solid") +
+    geom_vline(xintercept = median_val, color = "black", linewidth = 0.4, linetype = "dashed") +
+    scale_x_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
+    scale_y_continuous(labels = scales::comma, limits = c(0, right_max_count * 1.05)) +
+    labs(
+      title = title,
+      x     = if (show_x) "Expenditure (> $50K)" else NULL,
+      y     = if (show_y) paste0(prop_lbl, "\n\nCount") else NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title       = element_text(face = "plain", size = 11, hjust = 0.5),
+      axis.title       = element_text(size = 9, color = "grey40"),
+      axis.text        = element_text(size = 8),
+      axis.text.x      = if (show_x) element_text(size = 8) else element_blank(),
+      axis.ticks.x     = if (show_x) element_line() else element_blank(),
+      panel.grid.minor = element_blank()
+    )
+}
+
+p_1_right  <- make_hist_right(
+  "1% Extreme",  show_x = FALSE, show_y = TRUE,  title = "B) Histograms of Extreme Values")
+p_5_right  <- make_hist_right(
+  "5% Extreme",  show_x = FALSE, show_y = TRUE,  title = NULL)
+p_10_right <- make_hist_right(
+  "10% Extreme", show_x = TRUE,  show_y = TRUE,  title = NULL)
+
+# ── Combine ───────────────────────────────────────────────────────────────────
+plot_combined <- patchwork::wrap_plots(
+  p_extremes,
+  patchwork::wrap_plots(p_1_right, p_5_right, p_10_right, nrow = 3),
+  ncol   = 2,
+  widths = c(1, 1)
+) +
+  patchwork::plot_annotation(
+    title    = "Extreme Expenditures by Proportion of Extreme Values",
+    subtitle = glue::glue(
+      "Values above 95th percentile ({scales::dollar(zoom_cutoff, scale=1e-3, suffix='K')}); ",
+      "Magnitude level = 1 ($50K–$1M); n = 5,000\n",
+      "\u2014 Mean (solid)  - - - Median (dashed)"
+    ),
+    caption  = "Note: Zero-expenditure observations excluded. Right column y-axis fixed to 10% extreme maximum for comparability.",
     theme    = theme(
       plot.title    = element_text(face = "bold", size = 14),
       plot.subtitle = element_text(color = "grey40"),
@@ -511,147 +476,12 @@ plot_twopanel <- patchwork::wrap_plots(p_bulk, p_extremes, ncol = 2, widths = c(
     )
   )
 
-plot_twopanel
+plot_combined
 
 ggsave(
-  here::here(paste0("figures/twopanel_extremes_", dt, ".png")),
-  plot_twopanel,
-  width = 11, height = 6, dpi = 300
-)
-```
-
-
-### Option 3  
-```{r split_hist}
-# --- Data: positive values only ---
-dat_combined_pos <- dat_combined |> filter(TOTEXPYY > 0)
-
-bulk_cut <- 50000
-
-# --- Get actual max bin height from 10% extreme right panel ---
-get_max_bin_count <- function(prop_lbl) {
-  dat <- dat_combined_pos |>
-    filter(prop_extreme_lbl == prop_lbl, TOTEXPYY > bulk_cut)
-  h <- ggplot_build(
-    ggplot(dat, aes(x = TOTEXPYY)) + geom_histogram(bins = 60)
-  )
-  max(h$data[[1]]$count, na.rm = TRUE)
-}
-
-right_max_count <- get_max_bin_count("10% Extreme")
-right_max_count  # sanity check
-
-# Add mean and median lines to right side only: 
-make_hist_panel <- function(
-    prop_lbl, col, show_x, show_y, title = NULL, y_limit = NULL) {
-  
-  fill_col <- c(
-    "1% Extreme"  = "#4E9ABE",
-    "5% Extreme"  = "#F4A261",
-    "10% Extreme" = "#E76F51"
-  )[prop_lbl]
-  
-  dat <- dat_combined_pos |> filter(prop_extreme_lbl == prop_lbl)
-  
-  if (col == "left") {
-    dat     <- dat |> filter(TOTEXPYY <= bulk_cut)
-    x_scale <- list(
-      scale_x_continuous(
-        labels = scales::dollar_format(scale = 1e-3, suffix = "K")
-      ),
-      coord_cartesian(xlim = c(0, bulk_cut))
-    )
-    x_lab <- if (show_x) "Expenditure (≤ $50K)" else NULL
-    
-  } else {
-    dat     <- dat |> filter(TOTEXPYY > bulk_cut)
-    x_scale <- list(
-      scale_x_continuous(
-        labels = scales::dollar_format(scale = 1e-6, suffix = "M")
-      )
-    )
-    x_lab <- if (show_x) "Expenditure (> $50K)" else NULL
-  }
-  
-  p <- ggplot(dat, aes(x = TOTEXPYY)) +
-    geom_histogram(
-      bins      = 60,
-      fill      = fill_col,
-      color     = "white",
-      linewidth = 0.2
-    ) +
-    x_scale +
-    scale_y_continuous(
-      labels = scales::comma,
-      limits = y_limit
-    ) +
-    labs(
-      title = title,
-      x     = x_lab,
-      y     = if (show_y) paste0(prop_lbl, "\n\nCount") else NULL
-    ) +
-    theme_minimal(base_size = 11) +
-    theme(
-      plot.title         = element_text(face = "bold", size = 10, hjust = 0.5),
-      axis.title.x       = element_text(size = 9, color = "grey40"),
-      axis.title.y       = element_text(size = 9),
-      axis.text.x        = if (show_x) element_text(size = 8) else element_blank(),
-      axis.ticks.x       = if (show_x) element_line() else element_blank(),
-      panel.grid.minor   = element_blank()
-    )
-  
-  # Add mean and median lines for right panels only
-  if (col == "right") {
-    mean_val   <- mean(dat$TOTEXPYY, na.rm = TRUE)
-    median_val <- median(dat$TOTEXPYY, na.rm = TRUE)
-    
-    p <- p +
-      geom_vline(
-        xintercept = mean_val,
-        color      = "black",
-        linewidth  = 0.4,
-        linetype   = "solid"
-      ) +
-      geom_vline(
-        xintercept = median_val,
-        color      = "black",
-        linewidth  = 0.4,
-        linetype   = "dashed"
-      )
-  }
-  
-  p
-}
-
-# --- Build 6 panels ---
-p_1_left   <- make_hist_panel("1% Extreme",  "left",  show_x = FALSE, show_y = TRUE,  title = "Bulk (≤ $50K)")
-p_1_right  <- make_hist_panel("1% Extreme",  "right", show_x = FALSE, show_y = FALSE, title = "Extremes (> $50K)", y_limit = c(0, right_max_count * 1.05))
-p_5_left   <- make_hist_panel("5% Extreme",  "left",  show_x = FALSE, show_y = TRUE,  title = NULL)
-p_5_right  <- make_hist_panel("5% Extreme",  "right", show_x = FALSE, show_y = FALSE, title = NULL,               y_limit = c(0, right_max_count * 1.05))
-p_10_left  <- make_hist_panel("10% Extreme", "left",  show_x = TRUE,  show_y = TRUE,  title = NULL)
-p_10_right <- make_hist_panel("10% Extreme", "right", show_x = TRUE,  show_y = FALSE, title = NULL,               y_limit = c(0, right_max_count * 1.05))
-
-# --- Compose ---
-plot_hist_sixpanel <- patchwork::wrap_plots(
-  p_1_left,  p_1_right,
-  p_5_left,  p_5_right,
-  p_10_left, p_10_right,
-  nrow = 3, ncol = 2
-)
-
-plot_hist_sixpanel <- plot_hist_sixpanel + 
-	patchwork::plot_annotation(
-  title    = "Distribution of Positive Expenditures by Proportion of Extreme Values",
-  subtitle = "Rows = proportion of extreme values (1%, 5%, 10%); Left = bulk (≤$50K); Right = extreme tail (>$50K)\nMagnitude level = 1 ($50,000–$1,000,000); n = 5,000; restricted to positive spenders",
-  caption  = "Note: Zero-expenditure observations excluded; modeled separately via logistic component.\nRight column y-axis fixed to 10% extreme condition maximum to allow direct comparison across rows."
-)
-
-plot_hist_sixpanel
-
-ggsave(
-  here::here(paste0("figures/hist_sixpanel_extremes_", dt, ".png")),
-  plot_hist_sixpanel,
-  width  = 10,
+  here::here(paste0("figures/extremes_combined_", dt, ".png")),
+  plot_combined,
+  width  = 11,
   height = 9,
   dpi    = 300
 )
