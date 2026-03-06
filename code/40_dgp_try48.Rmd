@@ -225,7 +225,8 @@ safe_gamma_fit <- function(dat) {
 
 ```
 
-#4) ATT computation (RQ4): Estimated + TRUE using same COEF
+#4) ATT computation (RQ4): Estimated + TRUE using same COEF  
+
 ```{r att}
 compute_ATT_hat <- function(dat, fit_logit, fit_gamma) {
 

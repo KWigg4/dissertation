@@ -346,6 +346,32 @@ all_df_gamma |>
 dat_combined <- readRDS(here::here("results/example_datasets.RDS"))
 # write.csv(dat_combined,
 #          here::here("results/dat_combined.csv"))
+
+dat_example1     <- readRDS(here::here("results/example_dataset1.RDS"))
+
+dat_example1 |> 
+  group_by(ind_tx) |> 
+  summarize(mean = mean(TOTEXPYY),
+            sd = sd(TOTEXPYY))
+
+dat_example1 |> 
+  summarize(mean = mean(TOTEXPYY),
+            sd = sd(TOTEXPYY))
+
+library(gtsummary)
+dat_example1 |> 
+  gtsummary::tbl_summary(
+    include = c(ind_gt0, HISPANX, ind_female, ind_post),
+    by = ind_tx,
+    type = list(
+      c(ind_gt0, HISPANX, ind_female, ind_post) ~ "categorical"
+    ),
+    digits = list(
+      c(ind_gt0, HISPANX, ind_female, ind_post) ~ c(0, 2)
+    )
+  ) |> 
+  add_overall()
+
 ```
 
 
@@ -356,8 +382,8 @@ dat_combined <- readRDS(here::here("results/example_datasets.RDS"))
 ```{r ex_opt2}
 library(patchwork)
 
-# ── Data prep ─────────────────────────────────────────────────────────────────
-dat_example1     <- readRDS(here::here("results/example_dataset1.RDS"))
+# ── Data prep 
+# dat_example1 in chunk above needed in this chunk 
 zoom_cutoff      <- quantile(dat_example1$TOTEXPYY, 0.95)
 bulk_cut         <- 50000
 dat_combined_pos <- dat_combined |> filter(TOTEXPYY > 0)
