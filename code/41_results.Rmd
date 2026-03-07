@@ -97,6 +97,8 @@ all_df_att <- fn_readRDS(all_df_att) |> # 67,371
          "Proportion"=prop_extreme_fct,
          "Magnitude" = magnitude_fct)
 
+
+
 ```    
 
 ```{r scenario_key}
