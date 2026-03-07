@@ -270,5 +270,188 @@ ggplot2::ggsave(
   height = 4.5,
   dpi    = 300
 )
+```  
+
+Rank bump  
+
+```{r}
+# p_bump - rank bump chart
+# Requires p_bubble code to have been run first (uses rank_df, trt_colors,
+# trt_order, metric_levels, metric_recode)
+
+bump_long <- rank_df |>
+  tidyr::pivot_longer(
+    cols      = starts_with("r_"),
+    names_to  = "Metric",
+    values_to = "Rank"
+  ) |>
+  dplyr::mutate(
+    Metric = dplyr::recode(Metric, !!!metric_recode),
+    Metric = factor(Metric, levels = metric_levels),
+    Treatment = factor(Treatment, levels = trt_order)
+  )
+
+# Force label order: top to bottom as specified
+label_y_order <- c(
+  "No treatment"                = 1,
+  "Top-coding"                  = 2,
+  "Mean-preserved top-coding"   = 3,
+  "Median-preserved top-coding" = 4,
+  "Truncation"                  = 5
+)
+
+bump_labels <- bump_long |>
+  dplyr::filter(Metric == "ATT Abs Bias") |>
+  dplyr::mutate(
+    label_y = label_y_order[as.character(Treatment)]
+  )
+
+bump_caption <- paste0(
+  "Ranking: closest to 0 = Bias, ATT Bias  \u00b7  ",
+  "lower = Abs Bias, ESE, ATT Abs Bias  \u00b7  ",
+  "higher = ModSE/ESE, CI Coverage"
+)
+
+# x positions for annotations (numeric positions on discrete axis)
+# metric_levels order: Bias=1, Abs Bias=2, ESE=3, ModSE/ESE=4,
+#   CI Coverage=5, ATT Bias=6, ATT Abs Bias=7
+# Divider goes between CI Coverage (5) and ATT Bias (6)
+
+p_bump <- ggplot2::ggplot(
+    bump_long,
+    ggplot2::aes(
+      x     = as.numeric(Metric),
+      y     = Rank,
+      group = Treatment,
+      color = Treatment
+    )
+  ) +
+  ggplot2::annotate(
+    "segment",
+    x        = 5.5,
+    xend     = 5.5,
+    y        = 0.6,
+    yend     = 5.4,
+    color    = "grey80",
+    linewidth = 0.7,
+    linetype = "dashed"
+  ) +
+  ggplot2::annotate(
+    "text",
+    x        = 3,
+    y        = 0.3,
+    label    = "GAMMA INTERACTION TERM",
+    size     = 2.6,
+    color    = "#4a6fa5",
+    fontface = "bold",
+    hjust    = 0.5
+  ) +
+  ggplot2::annotate(
+    "text",
+    x        = 6.5,
+    y        = 0.3,
+    label    = "ATT",
+    size     = 2.6,
+    color    = "#c17f3b",
+    fontface = "bold",
+    hjust    = 0.5
+  ) +
+  ggplot2::geom_line(linewidth = 1.1) +
+  ggplot2::geom_point(
+    ggplot2::aes(fill = Treatment),
+    size   = 3.5,
+    shape  = 21,
+    color  = "white",
+    stroke = 1.2
+  ) +
+  ggplot2::geom_text(
+    data     = bump_labels,
+    ggplot2::aes(
+      x     = as.numeric(Metric) + 0.15,
+      y     = label_y,
+      label = Treatment,
+      color = Treatment
+    ),
+    hjust    = 0,
+    size     = 3,
+    fontface = "bold",
+    show.legend = FALSE
+  ) +
+  ggplot2::geom_segment(
+    data = bump_labels,
+    ggplot2::aes(
+      x    = as.numeric(Metric) + 0.08,
+      xend = as.numeric(Metric) + 0.12,
+      y    = Rank,
+      yend = label_y,
+      color = Treatment
+    ),
+    linewidth = 0.3,
+    linetype  = "dotted",
+    show.legend = FALSE
+  ) +
+  ggplot2::scale_x_continuous(
+    breaks = 1:7,
+    labels = metric_levels,
+    expand = ggplot2::expansion(add = c(0.3, 2.5))
+  ) +
+  ggplot2::scale_y_reverse(
+    breaks = 1:5,
+    labels = c("1st\n(best)", "2nd", "3rd", "4th", "5th\n(worst)")
+  ) +
+  ggplot2::scale_color_manual(values = trt_colors) +
+  ggplot2::scale_fill_manual(values  = trt_colors) +
+  ggplot2::coord_cartesian(
+    ylim = c(5.4, 0.2), clip = "off"
+  ) +
+  ggplot2::labs(
+    title    = "Rank Across Outcomes by Treatment Method",
+    subtitle = "Rank 1 = best performer on each metric",
+    x        = NULL,
+    y        = "Rank",
+    caption  = bump_caption
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position    = "none",
+    plot.title.position = "plot",
+    plot.title         = ggplot2::element_text(
+      size = 12, face = "bold", hjust = 0
+    ),
+    plot.subtitle      = ggplot2::element_text(
+      size = 9, color = "grey40", hjust = 0
+    ),
+    plot.caption       = ggplot2::element_text(
+      size = 8, color = "grey40", hjust = 0
+    ),
+    axis.text.x        = ggplot2::element_text(
+      size = 9, face = "bold", color = "grey25"
+    ),
+    axis.text.y        = ggplot2::element_text(
+      size = 9, color = "grey30"
+    ),
+    axis.title.y       = ggplot2::element_text(
+      size = 9, color = "grey40"
+    ),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_line(
+      color = "grey90"
+    ),
+    panel.grid.minor   = ggplot2::element_blank(),
+    plot.margin        = ggplot2::margin(
+      t = 20, r = 90, b = 10, l = 10
+    )
+  )
+
+p_bump
+
+ggplot2::ggsave(
+  here::here(paste0("figures/rank_bump_", dt, ".png")),
+  plot   = p_bump,
+  width  = 9,
+  height = 5,
+  dpi    = 300
+)
 ```
+
 
