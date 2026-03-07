@@ -10,22 +10,265 @@ knitr::opts_chunk$set(echo = FALSE)
 overall <- readxl::read_xlsx(here::here("results/Overall_RQ_results.xlsx"))
 ```
 
-## R Markdown
+```{r}
+## Summary performance figure: bubble table
+## Paste into 41_results.Rmd.
+## Requires: dplyr, tidyr, ggplot2, scales
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# 0. Data
+summary_df <- tibble::tribble(
+  ~Treatment,             ~Bias, ~Abs_Bias, ~ESE,
+  ~Ratio, ~Coverage,    ~ATT_Bias, ~ATT_Abs_Bias,
+  "No treatment",
+   0.014,  0.295, 0.42, 0.82, 0.9337, -1153.98, 3121.28,
+  "Top-coding",
+  -0.003,  0.077, 0.12, 0.80, 0.9385,  -366.71,  607.79,
+  "Mean-preserved top-coding",
+   0.022,  0.163, 0.21, 0.94, 0.9441,   310.61, 3389.72,
+  "Median-preserved top-coding",
+   0.010,  0.120, 0.18, 0.81, 0.9438,  -743.60, 1717.10,
+  "Truncation",
+  -0.008,  0.084, 0.14, 0.70, 0.9145,  -149.74,  306.27
+)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+trt_order <- c(
+  "No treatment",
+  "Top-coding",
+  "Mean-preserved top-coding",
+  "Median-preserved top-coding",
+  "Truncation"
+)
 
-```{r cars}
-summary(cars)
+trt_colors <- c(
+  "No treatment"                = "#0072B2",
+  "Top-coding"                  = "#E69F00",
+  "Mean-preserved top-coding"   = "#009E73",
+  "Median-preserved top-coding" = "#CC79A7",
+  "Truncation"                  = "#D55E00"
+)
+
+summary_df <- summary_df |>
+  dplyr::mutate(
+    Treatment = factor(Treatment, levels = trt_order)
+  )
+
+# 1. Rank each metric
+# Bias, ATT_Bias    : closest to 0
+# Abs_Bias, ESE, ATT_Abs_Bias : lower = better
+# Ratio, Coverage : higher = better (negate before ranking)
+
+rank_df <- summary_df |>
+  dplyr::mutate(
+    r_Bias         = rank(
+      abs(Bias), ties.method = "min"
+    ),
+    r_Abs_Bias     = rank(
+      Abs_Bias, ties.method = "min"
+    ),
+    r_ESE          = rank(
+      ESE, ties.method = "min"
+    ),
+    r_Ratio        = rank(
+      -Ratio, ties.method = "min"
+    ),
+    r_Coverage     = rank(
+      -Coverage, ties.method = "min"
+    ),
+    r_ATT_Bias     = rank(
+      abs(ATT_Bias), ties.method = "min"
+    ),
+    r_ATT_Abs_Bias = rank(
+      ATT_Abs_Bias, ties.method = "min"
+    )
+  )
+
+metric_levels <- c(
+  "Bias", "Abs Bias", "ESE",
+  "ModSE/ESE", "CI Coverage",
+  "ATT Bias", "ATT Abs Bias"
+)
+
+metric_recode <- c(
+  r_Bias         = "Bias",
+  r_Abs_Bias     = "Abs Bias",
+  r_ESE          = "ESE",
+  r_Ratio        = "ModSE/ESE",
+  r_Coverage     = "CI Coverage",
+  r_ATT_Bias     = "ATT Bias",
+  r_ATT_Abs_Bias = "ATT Abs Bias"
+)
+
+# 2. Bubble table
+rank_pal <- c(
+  "1" = "#2d6a4f",
+  "2" = "#74c69d",
+  "3" = "#d6d1c8",
+  "4" = "#e07b86",
+  "5" = "#9b2335"
+)
+
+rank_text_pal <- c(
+  "1" = "white",
+  "2" = "grey15",
+  "3" = "grey40",
+  "4" = "white",
+  "5" = "white"
+)
+
+# Pivot summary_df to long for joining values
+summary_long <- summary_df |>
+  tidyr::pivot_longer(
+    cols      = -Treatment,
+    names_to  = "metric_key",
+    values_to = "raw_val"
+  ) |>
+  dplyr::mutate(
+    Metric = dplyr::recode(
+      metric_key,
+      Bias         = "Bias",
+      Abs_Bias     = "Abs Bias",
+      ESE          = "ESE",
+      Ratio        = "ModSE/ESE",
+      Coverage     = "CI Coverage",
+      ATT_Bias     = "ATT Bias",
+      ATT_Abs_Bias = "ATT Abs Bias"
+    )
+  ) |>
+  dplyr::select(Treatment, Metric, raw_val)
+
+bubble_long <- rank_df |>
+  tidyr::pivot_longer(
+    cols      = starts_with("r_"),
+    names_to  = "Metric",
+    values_to = "Rank"
+  ) |>
+  dplyr::mutate(
+    Metric    = dplyr::recode(Metric, !!!metric_recode),
+    Metric    = factor(Metric, levels = metric_levels),
+    Treatment = factor(Treatment, levels = rev(trt_order)),
+    fill_col  = rank_pal[as.character(Rank)],
+    text_col  = rank_text_pal[as.character(Rank)],
+    bub_size  = dplyr::case_when(
+      Rank %in% c(1, 5) ~ 14,
+      Rank %in% c(2, 4) ~ 11,
+      TRUE              ~ 8
+    )
+  ) |>
+  dplyr::left_join(summary_long, by = c("Treatment", "Metric")) |>
+  dplyr::mutate(
+    Value = dplyr::case_when(
+      Metric == "Bias"         ~ sprintf("%.3f", raw_val),
+      Metric == "Abs Bias"     ~ sprintf("%.3f", raw_val),
+      Metric == "ESE"          ~ sprintf("%.2f", raw_val),
+      Metric == "ModSE/ESE"    ~ sprintf("%.2f", raw_val),
+      Metric == "CI Coverage"  ~ paste0(
+        sprintf("%.1f", raw_val * 100), "%"
+      ),
+      Metric == "ATT Bias"     ~ paste0(
+        "$", scales::comma(round(raw_val))
+      ),
+      Metric == "ATT Abs Bias" ~ paste0(
+        "$", scales::comma(round(raw_val))
+      )
+    )
+  )
+
+bubble_subtitle <- paste0(
+  "Ranking: closest to 0 = Bias, ATT Bias  \u00b7  ",
+  "lower = Abs Bias, ESE, ATT Abs Bias  \u00b7  ",
+  "higher = ModSE/ESE, CI Coverage"
+)
+
+bubble_caption <- paste0(
+  "Green = best (rank 1)  \u00b7  ",
+  "Red = worst (rank 5)  \u00b7  ",
+  "Bubble size reflects rank extremity"
+)
+
+p_bubble <- ggplot2::ggplot(
+    bubble_long,
+    ggplot2::aes(x = Metric, y = Treatment)
+  ) +
+  ggplot2::annotate(
+    "segment",
+    x        = 5.5,
+    xend     = 5.5,
+    y        = 0.4,
+    yend     = 5.6,
+    color    = "grey75",
+    linewidth = 0.6,
+    linetype = "dashed"
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(size = I(bub_size), fill = I(fill_col)),
+    shape  = 21,
+    color  = "white",
+    stroke = 0.4
+  ) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = Rank, color = I(text_col)),
+    size     = 3.2,
+    fontface = "bold"
+  ) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = Value),
+    nudge_y  = 0.38,
+    size     = 2.4,
+    color    = "black",
+    fontface = "plain"
+  ) +
+  ggplot2::scale_x_discrete(position = "top") +
+  ggplot2::scale_y_discrete(
+    expand = ggplot2::expansion(add = c(0.7, 0.8))
+  ) +
+  ggplot2::coord_cartesian(clip = "off") +
+  ggplot2::labs(
+    title    = paste0(
+      "Data Treatment Method",
+      " Performance: Rank Summary"
+    ),
+    subtitle = bubble_subtitle,
+    x        = NULL,
+    y        = NULL,
+    caption  = bubble_caption
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+  	plot.title.position = "plot",
+    plot.title       = ggplot2::element_text(
+      size = 12, face = "bold", hjust = 0
+    ),
+    plot.subtitle    = ggplot2::element_text(
+      size = 8, color = "grey40", hjust = 0
+    ),
+    plot.caption     = ggplot2::element_text(
+      size = 8, color = "grey40", hjust = 0
+    ),
+    axis.text.x.top  = ggplot2::element_text(
+      size = 9, face = "bold", color = "grey25"
+    ),
+    axis.text.y      = ggplot2::element_text(
+      size = 10, color = "grey20"
+    ),
+    panel.grid.major = ggplot2::element_line(
+      color = "grey92"
+    ),
+    panel.grid.minor = ggplot2::element_blank(),
+    plot.margin      = ggplot2::margin(
+      t = 20, r = 10, b = 10, l = 10
+    )
+  )
+
+p_bubble
+
+# Save
+# View saved PNG (not RStudio pane) for true render quality
+ggplot2::ggsave(
+  here::here(paste0("figures/bubble_summary_", dt, ".png")),
+  plot   = p_bubble,
+  width  = 9,
+  height = 4.5,
+  dpi    = 300
+)
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
