@@ -2355,66 +2355,313 @@ ggsave(
 
 ```  
 
+
+
 ```{r}
-# Compute mean absolute bias for each cell of the 4-way interaction
-foursway_att <- all_df_att |>
-  group_by(Treatment, N, Proportion, Magnitude) |>
+# error bars didn't show up, so took them off. 
+
+library(ggrepel)
+library(ggtext)
+
+# Plot 1: Treatment x Proportion
+twoway_trt_prop <- all_df_att |>
+  group_by(Treatment, Proportion) |>
   summarise(
     mean_abs_bias = mean(abs_bias, na.rm = TRUE),
-    .groups = "drop"
-  ) 
+    .groups       = "drop"
+  ) |>
+  mutate(Treatment = factor(Treatment, levels = trt_order))
 
-pd <- position_dodge(width=0.3) 
+prop_labels <- twoway_trt_prop |>
+  group_by(Treatment) |>
+  slice_tail(n = 1)
 
-plot_4way_att <- ggplot(
-  foursway_att,
-  aes(x = Magnitude, y = mean_abs_bias, color = Treatment, group = Treatment)
+plot_trt_prop <- ggplot(
+  twoway_trt_prop,
+  aes(
+    x     = Proportion,
+    y     = mean_abs_bias,
+    color = Treatment,
+    group = Treatment
+  )
 ) +
-  # geom_line(linewidth = 0.8, position = pd, alpha = 0.6) +
-  geom_point(size = 2, position = pd) +
-  facet_grid(
-    N ~ Proportion,
-    labeller = labeller(
-      N          = function(x) paste0("N = ", x),
-      Proportion = function(x) paste0("Prop = ", x)
-    )
+  geom_hline(
+    yintercept = 0,
+    linewidth  = 0.4,
+    color      = "grey30"
   ) +
-  scale_color_manual(
-    name   = "Treatment",
-    values = c(
-      "No treatment"                = "#0072B2",
-      "Top-coding"                  = "#E69F00",
-      "Mean-preserved top-coding"   = "#009E73",
-      "Median-preserved top-coding" = "#CC79A7",
-      "Truncation"                  = "#D55E00"
-    )
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 3.5, shape = 18) +
+  geom_segment(
+    data = prop_labels,
+    aes(
+      x    = 3.05,
+      xend = 3.12,
+      y    = mean_abs_bias,
+      yend = mean_abs_bias
+    ),
+    linetype  = "dotted",
+    linewidth = 0.4,
+    alpha     = 0.5
   ) +
-  guides(color = guide_legend(nrow=2))+
+  geom_text(
+    data        = prop_labels,
+    aes(x = 3.12, label = Treatment),
+    hjust       = 0,
+    size        = 3.2,
+    show.legend = FALSE
+  ) +
+  scale_x_discrete(expand = expansion(add = c(0.2, 1.0))) +
+  scale_y_continuous(
+    breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500)
+  ) +
+  scale_color_manual(values = trt_colors) +
+  coord_cartesian(clip = "off") +
   labs(
-    title    = "Four-Way Interaction: ATT Absolute Bias",
-    subtitle = "Mean absolute bias by treatment, magnitude, proportion of extremes, and sample size",
-    x        = "Magnitude level",
-    y        = "Mean absolute bias"
+    title = "ATT Absolute Bias: *Treatment*:*Proportion*",
+    x     = "Proportion of extreme values",
+    y     = "Mean absolute bias"
   ) +
-  theme_minimal(base_size = 11) +
+  base_theme +
   theme(
-    legend.position     = "bottom",
-    strip.text          = element_text(face = "bold"),
-    plot.title          = element_text(face = "bold"),
-    plot.title.position = "plot"
+    legend.position = "none",
+    plot.title      = element_markdown(),
+    plot.margin     = margin(5, 10, 5, 5)
   )
 
-plot_4way_att
+plot_trt_prop
 
 ggsave(
-  here::here(paste0("figures/att_absbias_4way_interaction_", dt, ".png")),
-  plot_4way_att, width = 12, height = 9, dpi = 300
+  here::here(paste0("figures/att_absbias_2way_trt_prop_", dt, ".png")),
+  plot_trt_prop,
+  width  = 10,
+  height = 5.5,
+  dpi    = 300
 )
 
+# Plot 2: Treatment x Magnitude
+twoway_trt_mag <- all_df_att |>
+  group_by(Treatment, Magnitude) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    .groups       = "drop"
+  ) |>
+  mutate(Treatment = factor(Treatment, levels = trt_order))
+
+mag_labels <- twoway_trt_mag |>
+  group_by(Treatment) |>
+  slice_tail(n = 1)
+
+plot_trt_mag <- ggplot(
+  twoway_trt_mag,
+  aes(
+    x     = Magnitude,
+    y     = mean_abs_bias,
+    color = Treatment,
+    group = Treatment
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth  = 0.4,
+    color      = "grey30"
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 3.5, shape = 18) +
+  geom_segment(
+    data = mag_labels,
+    aes(
+      x    = 3.05,
+      xend = 3.12,
+      y    = mean_abs_bias,
+      yend = mean_abs_bias
+    ),
+    linetype  = "dotted",
+    linewidth = 0.4,
+    alpha     = 0.5
+  ) +
+  geom_text(
+    data        = mag_labels,
+    aes(x = 3.12, label = Treatment),
+    hjust       = 0,
+    size        = 3.2,
+    show.legend = FALSE
+  ) +
+  scale_x_discrete(expand = expansion(add = c(0.2, 1.0))) +
+  scale_y_continuous(
+    breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500)
+  ) +
+  scale_color_manual(values = trt_colors) +
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "ATT Absolute Bias: *Treatment*:*Magnitude*",
+    x     = "Magnitude level",
+    y     = "Mean absolute bias"
+  ) +
+  base_theme +
+  theme(
+    legend.position = "none",
+    plot.title      = element_markdown(),
+    plot.margin     = margin(5, 10, 5, 5)
+  )
+
+plot_trt_mag
+
+ggsave(
+  here::here(paste0("figures/att_absbias_2way_trt_mag_", dt, ".png")),
+  plot_trt_mag,
+  width  = 10,
+  height = 5.5,
+  dpi    = 300
+)
+```  
+
+```{r}
+library(patchwork)
+
+# Plot 1: Treatment x Proportion
+twoway_trt_prop <- all_df_att |>
+  group_by(Treatment, Proportion) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    .groups       = "drop"
+  ) |>
+  mutate(Treatment = factor(Treatment, levels = trt_order))
+
+prop_labels <- twoway_trt_prop |>
+  group_by(Treatment) |>
+  slice_tail(n = 1)
+
+plot_trt_prop <- ggplot(
+  twoway_trt_prop,
+  aes(
+    x     = Proportion,
+    y     = mean_abs_bias,
+    color = Treatment,
+    group = Treatment
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth  = 0.4,
+    color      = "grey30"
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 3.5, shape = 18) +
+  geom_segment(
+    data = prop_labels,
+    aes(
+      x    = 3.05,
+      xend = 3.12,
+      y    = mean_abs_bias,
+      yend = mean_abs_bias
+    ),
+    linetype  = "dotted",
+    linewidth = 0.4,
+    alpha     = 0.5
+  ) +
+  geom_text(
+    data        = prop_labels,
+    aes(x = 3.12, label = Treatment),
+    hjust       = 0,
+    size        = 3.2,
+    show.legend = FALSE
+  ) +
+  scale_x_discrete(expand = expansion(add = c(0.2, 1.0))) +
+  scale_y_continuous(
+    breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500)
+  ) +
+  scale_color_manual(values = trt_colors) +
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "ATT Absolute Bias: *Treatment*:*Proportion*",
+    x     = "Proportion of extreme values",
+    y     = "Mean absolute bias"
+  ) +
+  base_theme +
+  theme(
+    legend.position = "none",
+    plot.title      = element_markdown(),
+    plot.margin     = margin(5, 10, 5, 5)
+  )
+
+# Plot 2: Treatment x Magnitude
+twoway_trt_mag <- all_df_att |>
+  group_by(Treatment, Magnitude) |>
+  summarise(
+    mean_abs_bias = mean(abs_bias, na.rm = TRUE),
+    .groups       = "drop"
+  ) |>
+  mutate(Treatment = factor(Treatment, levels = trt_order))
+
+mag_labels <- twoway_trt_mag |>
+  group_by(Treatment) |>
+  slice_tail(n = 1)
+
+plot_trt_mag <- ggplot(
+  twoway_trt_mag,
+  aes(
+    x     = Magnitude,
+    y     = mean_abs_bias,
+    color = Treatment,
+    group = Treatment
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth  = 0.4,
+    color      = "grey30"
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 3.5, shape = 18) +
+  geom_segment(
+    data = mag_labels,
+    aes(
+      x    = 3.05,
+      xend = 3.12,
+      y    = mean_abs_bias,
+      yend = mean_abs_bias
+    ),
+    linetype  = "dotted",
+    linewidth = 0.4,
+    alpha     = 0.5
+  ) +
+  geom_text(
+    data        = mag_labels,
+    aes(x = 3.12, label = Treatment),
+    hjust       = 0,
+    size        = 3.2,
+    show.legend = FALSE
+  ) +
+  scale_x_discrete(expand = expansion(add = c(0.2, 1.0))) +
+  scale_y_continuous(
+    breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500)
+  ) +
+  scale_color_manual(values = trt_colors) +
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "ATT Absolute Bias: *Treatment*:*Magnitude*",
+    x     = "Magnitude level",
+    y     = "Mean absolute bias"
+  ) +
+  base_theme +
+  theme(
+    legend.position = "none",
+    plot.title      = element_markdown(),
+    plot.margin     = margin(5, 10, 5, 5)
+  )
+
+plot_combined <- plot_trt_prop / plot_trt_mag
+
+plot_combined
+
+ggsave(
+  here::here(paste0("figures/att_absbias_2way_combined_", dt, ".png")),
+  plot_combined,
+  width  = 10,
+  height = 10,
+  dpi    = 300
+)
 ```
-
-
-
-
 
 
