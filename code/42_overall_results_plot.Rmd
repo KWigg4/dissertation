@@ -217,7 +217,10 @@ p_bubble <- ggplot2::ggplot(
     color    = "black",
     fontface = "plain"
   ) +
-  ggplot2::scale_x_discrete(position = "top") +
+  ggplot2::scale_x_discrete(
+    position = "top",
+    limits   = metric_levels
+  ) +
   ggplot2::scale_y_discrete(
     expand = ggplot2::expansion(add = c(0.7, 0.8))
   ) +
@@ -234,7 +237,7 @@ p_bubble <- ggplot2::ggplot(
   ) +
   ggplot2::theme_minimal(base_size = 11) +
   ggplot2::theme(
-  	plot.title.position = "plot",
+    plot.title.position = "plot",
     plot.title       = ggplot2::element_text(
       size = 12, face = "bold", hjust = 0
     ),
@@ -264,7 +267,7 @@ p_bubble
 # Save
 # View saved PNG (not RStudio pane) for true render quality
 ggplot2::ggsave(
-  here::here(paste0("figures/bubble_summary_", dt, ".png")),
+  here::here(paste0("figures/bubble_summary.png")),
   plot   = p_bubble,
   width  = 9,
   height = 4.5,
@@ -275,6 +278,7 @@ ggplot2::ggsave(
 Rank bump  
 
 ```{r}
+
 # p_bump - rank bump chart
 # Requires p_bubble code to have been run first (uses rank_df, trt_colors,
 # trt_order, metric_levels, metric_recode)
@@ -291,20 +295,8 @@ bump_long <- rank_df |>
     Treatment = factor(Treatment, levels = trt_order)
   )
 
-# Force label order: top to bottom as specified
-label_y_order <- c(
-  "No treatment"                = 1,
-  "Top-coding"                  = 2,
-  "Mean-preserved top-coding"   = 3,
-  "Median-preserved top-coding" = 4,
-  "Truncation"                  = 5
-)
-
 bump_labels <- bump_long |>
-  dplyr::filter(Metric == "ATT Abs Bias") |>
-  dplyr::mutate(
-    label_y = label_y_order[as.character(Treatment)]
-  )
+  dplyr::filter(Metric == "ATT Abs Bias")
 
 bump_caption <- paste0(
   "Ranking: closest to 0 = Bias, ATT Bias  \u00b7  ",
@@ -364,31 +356,23 @@ p_bump <- ggplot2::ggplot(
     color  = "white",
     stroke = 1.2
   ) +
-  ggplot2::geom_text(
-    data     = bump_labels,
+  ggrepel::geom_label_repel(
+    data               = bump_labels,
     ggplot2::aes(
-      x     = as.numeric(Metric) + 0.15,
-      y     = label_y,
-      label = Treatment,
-      color = Treatment
+      x     = as.numeric(Metric),
+      label = Treatment
     ),
-    hjust    = 0,
-    size     = 3,
-    fontface = "bold",
-    show.legend = FALSE
-  ) +
-  ggplot2::geom_segment(
-    data = bump_labels,
-    ggplot2::aes(
-      x    = as.numeric(Metric) + 0.08,
-      xend = as.numeric(Metric) + 0.12,
-      y    = Rank,
-      yend = label_y,
-      color = Treatment
-    ),
-    linewidth = 0.3,
-    linetype  = "dotted",
-    show.legend = FALSE
+    nudge_x            = 0.8,
+    hjust              = 0,
+    size               = 3,
+    label.size         = NA,
+    fill               = NA,
+    fontface           = "bold",
+    show.legend        = FALSE,
+    direction          = "y",
+    segment.size       = 0.3,
+    segment.color      = "grey70",
+    min.segment.length = 0.2
   ) +
   ggplot2::scale_x_continuous(
     breaks = 1:7,
@@ -452,6 +436,7 @@ ggplot2::ggsave(
   height = 5,
   dpi    = 300
 )
+
 ```
 
 
